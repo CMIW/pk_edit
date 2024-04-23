@@ -546,6 +546,10 @@ impl Pokemon {
 
     }
 
+    pub fn stats(&self) {
+
+    }
+
     pub fn is_egg(&self) -> bool {
         let offset = self.pokemon_data.miscellaneous_offset;
         let iv_egg_ability = &self.pokemon_data.data[offset + 4..offset + 8];
@@ -653,6 +657,30 @@ impl Default for PokemonData {
             miscellaneous_offset: 0,
         }
     }
+}
+
+struct Stats {
+    // Base
+    hp: u16,
+    attack: u16,
+    defense: u16,
+    sp_attack: u16,
+    sp_defense: u16,
+    speed: u16,
+    // Effort Values
+    hp_ev: u16,
+    attack_ev: u16,
+    defense_ev: u16,
+    sp_attack_ev: u16,
+    sp_defense_ev: u16,
+    speed_ev: u16,
+    // Individual Values
+    hp_iv: u16,
+    attack_iv: u16,
+    defense_iv: u16,
+    sp_attack_iv: u16,
+    sp_defense_iv: u16,
+    speed_iv: u16,
 }
 
 #[derive(Debug)]
