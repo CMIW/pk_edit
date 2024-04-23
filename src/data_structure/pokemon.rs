@@ -552,7 +552,7 @@ impl Pokemon {
 
         let ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
 
-        let stats = Stats {
+        Stats {
             // Base
             hp: base_stats["HP"].as_u64().unwrap() as u16,
             attack: base_stats["Attack"].as_u64().unwrap() as u16,
@@ -582,17 +582,7 @@ impl Pokemon {
             sp_defense_iv: ((ivs & 0x3E000000) >> 25) as u16,
             // Nature Modifiers
             n_mod: NATURE_MODIFIER[nature_index],
-        };
-        println!("{:#?}", stats);
-
-        println!("HP {:?}", stats.hp(self.level()));
-        println!("Attack {:?}", stats.attack(self.level()));
-        println!("Defense {:?}", stats.defense(self.level()));
-        println!("Sp Attack {:?}", stats.sp_attack(self.level()));
-        println!("Sp Defense {:?}", stats.sp_defense(self.level()));
-        println!("Speed {:?}", stats.speed(self.level()));
-
-        stats
+        }
     }
 
     pub fn is_egg(&self) -> bool {
