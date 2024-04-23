@@ -575,11 +575,11 @@ impl Pokemon {
             // Sp Attack    0x1F00000   = 0b00000001111100000000000000000000
             // Sp Defense   0x3E000000  = 0b00111110000000000000000000000000
             hp_iv: (ivs & 0x1F) as u16,
-            attack_iv: (ivs & 0x3E0 >> 5) as u16,
-            defense_iv: (ivs & 0x7C00 >> 10) as u16,
-            speed_iv: (ivs & 0xF8000 >> 15) as u16,
-            sp_attack_iv: (ivs & 0x1F00000 >> 20) as u16,
-            sp_defense_iv: (ivs & 0x3E000000 >> 25) as u16,
+            attack_iv: ((ivs & 0x3E0) >> 5) as u16,
+            defense_iv: ((ivs & 0x7C00) >> 10) as u16,
+            speed_iv: ((ivs & 0xF8000) >> 15) as u16,
+            sp_attack_iv: ((ivs & 0x1F00000) >> 20) as u16,
+            sp_defense_iv: ((ivs & 0x3E000000) >> 25) as u16,
             // Nature Modifiers
             n_mod: NATURE_MODIFIER[nature_index],
         };
