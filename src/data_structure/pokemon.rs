@@ -541,7 +541,7 @@ impl Pokemon {
         }
     }
 
-    pub fn stats(&self) -> Stats{
+    pub fn stats(&self) -> Stats {
         let index = self.nat_dex_number().saturating_sub(1) as usize;
         let nature_index = self.nature_index();
 
@@ -636,8 +636,8 @@ impl Pokemon {
         let offset = self.pokemon_data.miscellaneous_offset;
         let iv_egg_ability = &self.pokemon_data.data[offset + 4..offset + 8];
         // mask to get the 31 bit
-        //0x7fffffff = 0b01111111111111111111111111111111
-        const LOW_1_BITS_MASK: u32 = 0x7fffffff;
+        //0x80000000 = 0b10000000000000000000000000000000
+        const LOW_1_BITS_MASK: u32 = 0x80000000;
         // mask out the ability bit and shift it to the right
         ((LittleEndian::read_u32(iv_egg_ability) & LOW_1_BITS_MASK) >> 31) as usize
     }
@@ -709,7 +709,7 @@ impl Default for PokemonData {
 }
 
 #[derive(Debug, Default)]
-struct Stats {
+pub struct Stats {
     // Base
     hp: u16,
     attack: u16,
@@ -743,23 +743,53 @@ impl Stats {
     }
 
     pub fn attack(&self, level: u8) -> u16 {
-        calc_stat(self.attack, self.attack_iv, self.attack_ev, self.n_mod[0], level)
+        calc_stat(
+            self.attack,
+            self.attack_iv,
+            self.attack_ev,
+            self.n_mod[0],
+            level,
+        )
     }
 
     pub fn defense(&self, level: u8) -> u16 {
-        calc_stat(self.defense, self.defense_iv, self.defense_ev, self.n_mod[1], level)
+        calc_stat(
+            self.defense,
+            self.defense_iv,
+            self.defense_ev,
+            self.n_mod[1],
+            level,
+        )
     }
 
     pub fn speed(&self, level: u8) -> u16 {
-        calc_stat(self.speed, self.speed_iv, self.speed_ev, self.n_mod[2], level)
+        calc_stat(
+            self.speed,
+            self.speed_iv,
+            self.speed_ev,
+            self.n_mod[2],
+            level,
+        )
     }
 
     pub fn sp_attack(&self, level: u8) -> u16 {
-        calc_stat(self.sp_attack, self.sp_attack_iv, self.sp_attack_ev, self.n_mod[3], level)
+        calc_stat(
+            self.sp_attack,
+            self.sp_attack_iv,
+            self.sp_attack_ev,
+            self.n_mod[3],
+            level,
+        )
     }
 
     pub fn sp_defense(&self, level: u8) -> u16 {
-        calc_stat(self.sp_defense, self.sp_defense_iv, self.sp_defense_ev, self.n_mod[4], level)
+        calc_stat(
+            self.sp_defense,
+            self.sp_defense_iv,
+            self.sp_defense_ev,
+            self.n_mod[4],
+            level,
+        )
     }
 }
 
@@ -1025,5 +1055,5 @@ fn gender_threshold(index: usize) -> u32 {
 
 fn calc_stat(base: u16, iv: u16, ev: u16, n_mod: f32, level: u8) -> u16 {
     let level: u16 = level as u16;
-    (((((2 * base + iv + (ev / 4)) * level) / 100) + 5) as f32 * n_mod) as u16
+    (((((2 * base + iv + (ev / 4)) * level) / 100) + 5) as f32 * n_mod).floor() as u16
 }
