@@ -31,6 +31,6 @@ pub mod data_structure;
 pub mod test;
 
 #[doc(hidden)]
-pub use crate::data_structure::save_data::SaveFile;
-#[doc(hidden)]
 pub use crate::data_structure::pokemon::Pokemon;
+#[doc(hidden)]
+pub use crate::data_structure::save_data::SaveFile;

@@ -4,9 +4,8 @@ use lazy_static::lazy_static;
 use serde_json::Value;
 use std::fmt;
 
-use crate::data_structure::save_data::TrainerID;
 use crate::data_structure::character_set::get_char;
-
+use crate::data_structure::save_data::TrainerID;
 
 const SPECIES: [u16; 136] = [
     412, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294,
@@ -146,25 +145,21 @@ const NATURE_MODIFIER: [[f32; 5]; 25] = [
     [1.1, 1.0, 0.9, 1.0, 1.0],
     [1.1, 1.0, 1.0, 0.9, 1.0],
     [1.1, 1.0, 1.0, 1.0, 0.9],
-
     [0.9, 1.1, 1.0, 1.0, 1.0],
     [1.0, 1.0, 1.0, 1.0, 1.0],
     [1.0, 1.1, 0.9, 1.0, 1.0],
     [1.0, 1.1, 1.0, 0.9, 1.0],
     [1.0, 1.1, 1.0, 1.0, 0.9],
-
     [0.9, 1.0, 1.1, 1.0, 1.0],
     [1.0, 0.9, 1.1, 1.0, 1.0],
     [1.0, 1.0, 1.0, 1.0, 1.0],
     [1.0, 1.0, 1.1, 0.9, 1.0],
     [1.0, 1.0, 1.1, 1.0, 0.9],
-
     [0.9, 1.0, 1.0, 1.1, 1.0],
     [1.0, 0.9, 1.0, 1.1, 1.0],
     [1.0, 1.0, 0.9, 1.1, 1.0],
     [1.0, 1.0, 1.0, 1.0, 1.0],
     [1.0, 1.0, 1.0, 1.1, 0.9],
-
     [0.9, 1.0, 1.0, 1.0, 1.1],
     [1.0, 0.9, 1.0, 1.0, 1.1],
     [1.0, 1.0, 0.9, 1.0, 1.1],
@@ -537,13 +532,12 @@ impl Pokemon {
 
     pub fn nature(&self) -> String {
         if !self.is_empty() {
-            let p = (self.personality_value() % 25) as usize;
+            let p = self.nature_index();
 
             NATURE[p].to_string()
         } else {
             String::from("")
         }
-
     }
 
     pub fn stats(&self) {
@@ -551,12 +545,50 @@ impl Pokemon {
         let nature_index = self.nature_index();
 
         let base_stats = &POKEDEX_JSON[index]["base"];
+        let ev_offset = self.pokemon_data.ev_offset;
 
-        println!("{base_stats}");
-        println!("{:?}", base_stats["HP"].as_u64().unwrap() as u16);
-        println!("{:?}", base_stats["Attack"].as_u64().unwrap() as u16);
+        println!(
+            "{:?}",
+            self.pokemon_data.data[ev_offset..ev_offset + 1][0] as u16
+        );
 
-        let n_mod = &NATURE_MODIFIER[nature_index];
+        let iv_offset = self.pokemon_data.miscellaneous_offset;
+
+        let ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
+
+        let stats = Stats {
+            // Base
+            hp: base_stats["HP"].as_u64().unwrap() as u16,
+            attack: base_stats["Attack"].as_u64().unwrap() as u16,
+            defense: base_stats["Defense"].as_u64().unwrap() as u16,
+            sp_attack: base_stats["Sp. Attack"].as_u64().unwrap() as u16,
+            sp_defense: base_stats["Sp. Defense"].as_u64().unwrap() as u16,
+            speed: base_stats["Speed"].as_u64().unwrap() as u16,
+            // Effort Values
+            hp_ev: self.pokemon_data.data[ev_offset..ev_offset + 1][0] as u16,
+            attack_ev: self.pokemon_data.data[ev_offset + 1..ev_offset + 2][0] as u16,
+            defense_ev: self.pokemon_data.data[ev_offset + 2..ev_offset + 3][0] as u16,
+            sp_attack_ev: self.pokemon_data.data[ev_offset + 4..ev_offset + 5][0] as u16,
+            sp_defense_ev: self.pokemon_data.data[ev_offset + 5..ev_offset + 6][0] as u16,
+            speed_ev: self.pokemon_data.data[ev_offset + 3..ev_offset + 4][0] as u16,
+            // Individual Values
+            // HP           0xF         = 0b00000000000000000000000000001111
+            hp_iv: (ivs & 0xF) as u16,
+            // Attack       0xF0        = 0b00000000000000000000000011110000
+            attack_iv: (ivs & 0xF0) as u16,
+            // Defense      0xF00       = 0b00000000000000000000111100000000
+            defense_iv: (ivs & 0xF00) as u16,
+            // Sp Attack    0xF0000     = 0b00000000000011110000000000000000
+            sp_attack_iv: (ivs & 0xF0000) as u16,
+            // Sp Defense   0xF00000    = 0b00000000111100000000000000000000
+            sp_defense_iv: (ivs & 0xF00000) as u16,
+            // Speed        0xF000      = 0b00000000000000001111000000000000
+            speed_iv: (ivs & 0xF000) as u16,
+            // Nature Modifiers
+            n_mod: NATURE_MODIFIER[nature_index],
+        };
+
+        println!("{:?}", stats);
     }
 
     pub fn is_egg(&self) -> bool {

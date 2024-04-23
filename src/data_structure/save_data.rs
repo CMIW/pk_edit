@@ -170,11 +170,7 @@ impl SaveFile {
             .filter(|section| range.contains(&section.id(&self.data).into()))
             .collect();
 
-        sections.sort_by(|a, b| {
-            a.id(&self.data)
-                .partial_cmp(&b.id(&self.data))
-                .unwrap()
-        });
+        sections.sort_by(|a, b| a.id(&self.data).partial_cmp(&b.id(&self.data)).unwrap());
 
         let sections: Vec<Section> = sections.iter().map(|section| **section).collect();
 
