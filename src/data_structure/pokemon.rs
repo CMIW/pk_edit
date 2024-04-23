@@ -139,6 +139,7 @@ const NATURE: [&str; 25] = [
     "Calm", "Gentle", "Sassy", "Careful", "Quirky",
 ];
 
+// Attack[0] Defense[1] Speed[2] Sp Attack[3] Sp Defense[4]
 const NATURE_MODIFIER: [[f32; 5]; 25] = [
     [1.0, 1.0, 1.0, 1.0, 1.0],
     [1.1, 0.9, 1.0, 1.0, 1.0],
@@ -540,7 +541,7 @@ impl Pokemon {
         }
     }
 
-    pub fn stats(&self) {
+    pub fn stats(&self) -> Stats{
         let index = self.nat_dex_number().saturating_sub(1) as usize;
         let nature_index = self.nature_index();
 
@@ -567,23 +568,31 @@ impl Pokemon {
             sp_defense_ev: self.pokemon_data.data[ev_offset + 5..ev_offset + 6][0] as u16,
             speed_ev: self.pokemon_data.data[ev_offset + 3..ev_offset + 4][0] as u16,
             // Individual Values
-            // HP           0xF         = 0b00000000000000000000000000001111
-            hp_iv: (ivs & 0xF) as u16,
-            // Attack       0xF0        = 0b00000000000000000000000011110000
-            attack_iv: (ivs & 0xF0) as u16,
-            // Defense      0xF00       = 0b00000000000000000000111100000000
-            defense_iv: (ivs & 0xF00) as u16,
-            // Sp Attack    0xF0000     = 0b00000000000011110000000000000000
-            sp_attack_iv: (ivs & 0xF0000) as u16,
-            // Sp Defense   0xF00000    = 0b00000000111100000000000000000000
-            sp_defense_iv: (ivs & 0xF00000) as u16,
-            // Speed        0xF000      = 0b00000000000000001111000000000000
-            speed_iv: (ivs & 0xF000) as u16,
+            // HP           0x1F        = 0b00000000000000000000000000011111
+            // Attack       0x3E0       = 0b00000000000000000000001111100000
+            // Defense      0x7C00      = 0b00000000000000000111110000000000
+            // Speed        0xF8000     = 0b00000000000011111000000000000000
+            // Sp Attack    0x1F00000   = 0b00000001111100000000000000000000
+            // Sp Defense   0x3E000000  = 0b00111110000000000000000000000000
+            hp_iv: (ivs & 0x1F) as u16,
+            attack_iv: (ivs & 0x3E0 >> 5) as u16,
+            defense_iv: (ivs & 0x7C00 >> 10) as u16,
+            speed_iv: (ivs & 0xF8000 >> 15) as u16,
+            sp_attack_iv: (ivs & 0x1F00000 >> 20) as u16,
+            sp_defense_iv: (ivs & 0x3E000000 >> 25) as u16,
             // Nature Modifiers
             n_mod: NATURE_MODIFIER[nature_index],
         };
+        println!("{:#?}", stats);
 
-        println!("{:?}", stats.hp(self.level()));
+        println!("HP {:?}", stats.hp(self.level()));
+        println!("Attack {:?}", stats.attack(self.level()));
+        println!("Defense {:?}", stats.defense(self.level()));
+        println!("Sp Attack {:?}", stats.sp_attack(self.level()));
+        println!("Sp Defense {:?}", stats.sp_defense(self.level()));
+        println!("Speed {:?}", stats.speed(self.level()));
+
+        stats
     }
 
     pub fn is_egg(&self) -> bool {
@@ -732,6 +741,26 @@ impl Stats {
 
         (((2 * self.hp + self.hp_iv + (self.hp_ev / 4)) * level) / 100) + level + 10
     }
+
+    pub fn attack(&self, level: u8) -> u16 {
+        calc_stat(self.attack, self.attack_iv, self.attack_ev, self.n_mod[0], level)
+    }
+
+    pub fn defense(&self, level: u8) -> u16 {
+        calc_stat(self.defense, self.defense_iv, self.defense_ev, self.n_mod[1], level)
+    }
+
+    pub fn speed(&self, level: u8) -> u16 {
+        calc_stat(self.speed, self.speed_iv, self.speed_ev, self.n_mod[2], level)
+    }
+
+    pub fn sp_attack(&self, level: u8) -> u16 {
+        calc_stat(self.sp_attack, self.sp_attack_iv, self.sp_attack_ev, self.n_mod[3], level)
+    }
+
+    pub fn sp_defense(&self, level: u8) -> u16 {
+        calc_stat(self.sp_defense, self.sp_defense_iv, self.sp_defense_ev, self.n_mod[4], level)
+    }
 }
 
 #[derive(Debug)]
@@ -748,13 +777,13 @@ pub enum Language {
 impl fmt::Display for Language {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Language::Japanese => write!(f, "JAP"),
-            Language::English => write!(f, "ENG"),
-            Language::French => write!(f, "FRE"),
-            Language::Italian => write!(f, "ITA"),
-            Language::German => write!(f, "GER"),
             Language::Unused => write!(f, ""),
+            Language::French => write!(f, "FRE"),
+            Language::German => write!(f, "GER"),
+            Language::English => write!(f, "ENG"),
+            Language::Italian => write!(f, "ITA"),
             Language::Spanish => write!(f, "SPA"),
+            Language::Japanese => write!(f, "JAP"),
         }
     }
 }
@@ -992,4 +1021,9 @@ fn gender_threshold(index: usize) -> u32 {
     };
 
     *threshold
+}
+
+fn calc_stat(base: u16, iv: u16, ev: u16, n_mod: f32, level: u8) -> u16 {
+    let level: u16 = level as u16;
+    (((((2 * base + iv + (ev / 4)) * level) / 100) + 5) as f32 * n_mod) as u16
 }
