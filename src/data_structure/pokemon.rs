@@ -548,11 +548,15 @@ impl Pokemon {
 
     pub fn stats(&self) {
         let index = self.nat_dex_number().saturating_sub(1) as usize;
-        let ability_index = self.ability_index();
+        let nature_index = self.nature_index();
 
         let base_stats = &POKEDEX_JSON[index]["base"];
 
         println!("{base_stats}");
+        println!("{:?}", base_stats["HP"].as_u64().unwrap() as u16);
+        println!("{:?}", base_stats["Attack"].as_u64().unwrap() as u16);
+
+        let n_mod = &NATURE_MODIFIER[nature_index];
     }
 
     pub fn is_egg(&self) -> bool {
@@ -577,6 +581,10 @@ impl Pokemon {
         }
 
         false
+    }
+
+    fn nature_index(&self) -> usize {
+        (self.personality_value() % 25) as usize
     }
 
     fn personality_value(&self) -> u32 {
@@ -664,6 +672,7 @@ impl Default for PokemonData {
     }
 }
 
+#[derive(Debug, Default)]
 struct Stats {
     // Base
     hp: u16,
