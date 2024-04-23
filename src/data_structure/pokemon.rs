@@ -547,11 +547,6 @@ impl Pokemon {
         let base_stats = &POKEDEX_JSON[index]["base"];
         let ev_offset = self.pokemon_data.ev_offset;
 
-        println!(
-            "{:?}",
-            self.pokemon_data.data[ev_offset..ev_offset + 1][0] as u16
-        );
-
         let iv_offset = self.pokemon_data.miscellaneous_offset;
 
         let ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
@@ -588,7 +583,7 @@ impl Pokemon {
             n_mod: NATURE_MODIFIER[nature_index],
         };
 
-        println!("{:?}", stats);
+        println!("{:?}", stats.hp(self.level()));
     }
 
     pub fn is_egg(&self) -> bool {
@@ -729,6 +724,14 @@ struct Stats {
     speed_iv: u16,
     // Nature Modifiers
     n_mod: [f32; 5],
+}
+
+impl Stats {
+    pub fn hp(&self, level: u8) -> u16 {
+        let level: u16 = level as u16;
+
+        (((2 * self.hp + self.hp_iv + (self.hp_ev / 4)) * level) / 100) + level + 10
+    }
 }
 
 #[derive(Debug)]
