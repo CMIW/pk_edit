@@ -547,7 +547,12 @@ impl Pokemon {
     }
 
     pub fn stats(&self) {
+        let index = self.nat_dex_number().saturating_sub(1) as usize;
+        let ability_index = self.ability_index();
 
+        let base_stats = &POKEDEX_JSON[index]["base"];
+
+        println!("{base_stats}");
     }
 
     pub fn is_egg(&self) -> bool {
@@ -681,6 +686,8 @@ struct Stats {
     sp_attack_iv: u16,
     sp_defense_iv: u16,
     speed_iv: u16,
+    // Nature Modifiers
+    n_mod: [f32; 5],
 }
 
 #[derive(Debug)]

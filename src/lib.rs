@@ -20,7 +20,7 @@
 //!
 //!     let party = save_file.get_party();
 //!
-//!     let box1 = save_file.get_box(0);
+//!     let box1 = save_file.pc_box(0);
 //!
 //!     Ok(())
 //! }

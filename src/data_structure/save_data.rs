@@ -130,7 +130,7 @@ impl SaveFile {
     pub fn get_party(&self) -> Vec<Pokemon> {
         let game_code = self.get_game_code();
         let section = self.get_section(SectionID::TeamItems).unwrap();
-        let section_data_buffer = section.read_data(&self.data);
+        let section_data_buffer = section.data(&self.data);
 
         let mut team: Vec<Pokemon> = vec![];
 
@@ -151,8 +151,8 @@ impl SaveFile {
         team
     }
 
-    pub fn get_box(&self, number: usize) -> Vec<Pokemon> {
-        self.pc_buffer.get_box(number)
+    pub fn pc_box(&self, number: usize) -> Vec<Pokemon> {
+        self.pc_buffer.pc_box(number)
     }
 
     pub fn is_pc_empty(&self) -> bool {
@@ -167,12 +167,12 @@ impl SaveFile {
         // Read all the Sections that hold the pc buffer from PCBufferA to PCbufferI
         let mut sections: Vec<&Section> = current_save
             .iter()
-            .filter(|section| range.contains(&section.read_id(&self.data).into()))
+            .filter(|section| range.contains(&section.id(&self.data).into()))
             .collect();
 
         sections.sort_by(|a, b| {
-            a.read_id(&self.data)
-                .partial_cmp(&b.read_id(&self.data))
+            a.id(&self.data)
+                .partial_cmp(&b.id(&self.data))
                 .unwrap()
         });
 
@@ -206,7 +206,7 @@ impl SaveFile {
     /// For Emerald any value other than 0 or 1 can be used.
     fn get_game_code(&self) -> u32 {
         let section = self.get_section(SectionID::TrainerInfo).unwrap();
-        let section_data_buffer = section.read_data(&self.data);
+        let section_data_buffer = section.data(&self.data);
         LittleEndian::read_u32(&section_data_buffer[0x00AC..0x00AC + 4])
     }
 
@@ -215,7 +215,7 @@ impl SaveFile {
 
         current_save
             .iter()
-            .find(|section| section.read_id(&self.data) == id)
+            .find(|section| section.id(&self.data) == id)
     }
 }
 
@@ -232,13 +232,13 @@ impl Section {
         LittleEndian::read_u32(&section_buffer[0x0FFC..])
     }
 
-    fn read_id(&self, buffer: &[u8]) -> SectionID {
+    fn id(&self, buffer: &[u8]) -> SectionID {
         let section_buffer = &buffer[self.offset..self.offset + self.size];
         let id = LittleEndian::read_u16(&section_buffer[0x0FF4..0x0FF6]);
         id.into()
     }
 
-    fn read_data<'a>(&'a self, buffer: &'a [u8]) -> &'a [u8] {
+    fn data<'a>(&'a self, buffer: &'a [u8]) -> &'a [u8] {
         let section_buffer = &buffer[self.offset..self.offset + self.size];
         &section_buffer[0..SECTION_DATA_SIZE]
     }
@@ -255,7 +255,7 @@ impl Section {
     /// -This new 16-bit value is the checksum.
     fn write_checksum(&self, buffer: &mut [u8]) {
         let mut checksum: u32 = 0;
-        let data = self.read_data(buffer);
+        let data = self.data(buffer);
 
         for chunk in data.chunks(4) {
             let (sum, _) = checksum.overflowing_add(LittleEndian::read_u32(chunk));
@@ -286,7 +286,7 @@ impl PCBuffer {
 
         // deconstruct the pc data from the the pc buffers
         for section in buffer {
-            if section.read_id(data_buffer) == SectionID::PCbufferI {
+            if section.id(data_buffer) == SectionID::PCbufferI {
                 data.extend_from_slice(
                     &data_buffer[section.offset..section.offset + PC_BUFFER_I_SECTION_SIZE],
                 );
@@ -300,7 +300,7 @@ impl PCBuffer {
         PCBuffer { buffer, data }
     }
 
-    fn get_box(&self, number: usize) -> Vec<Pokemon> {
+    fn pc_box(&self, number: usize) -> Vec<Pokemon> {
         let mut boxes = self.data[0x0004..0x8344].chunks(2400);
         let pc = boxes.nth(number).unwrap();
         let mut list: Vec<Pokemon> = vec![];
