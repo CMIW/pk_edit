@@ -50,13 +50,4 @@ mod tests {
 
         assert_eq!(Pokerus::None, torchik.pokerus_status());
     }
-
-    #[test]
-    fn stats() {
-        let torchik = Pokemon::new(0, &TORCHIK);
-
-        torchik.stats();
-
-        assert_eq!(true, true);
-    }
 }

@@ -1,3 +1,5 @@
+//! Implementation of [Pokémon data structure Gen (III)](https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_data_structure_(Generation_III)).
+//!
 use byteorder::{ByteOrder, LittleEndian};
 use csv::Reader;
 use lazy_static::lazy_static;
@@ -780,6 +782,54 @@ impl Stats {
             self.n_mod[4],
             level,
         )
+    }
+
+    pub fn hp_ev(&self) -> u16 {
+        self.hp_ev
+    }
+
+    pub fn attack_ev(&self) -> u16 {
+        self.attack_ev
+    }
+
+    pub fn defense_ev(&self) -> u16 {
+        self.defense_ev
+    }
+
+    pub fn speed_ev(&self) -> u16 {
+        self.hp_ev
+    }
+
+    pub fn sp_attack_ev(&self) -> u16 {
+        self.hp_ev
+    }
+
+    pub fn sp_defense_ev(&self) -> u16 {
+        self.hp_ev
+    }
+
+    pub fn hp_iv(&self) -> u16 {
+        self.hp_iv
+    }
+
+    pub fn attack_iv(&self) -> u16 {
+        self.attack_iv
+    }
+
+    pub fn defense_iv(&self) -> u16 {
+        self.defense_iv
+    }
+
+    pub fn speed_iv(&self) -> u16 {
+        self.hp_iv
+    }
+
+    pub fn sp_attack_iv(&self) -> u16 {
+        self.hp_iv
+    }
+
+    pub fn sp_defense_iv(&self) -> u16 {
+        self.hp_iv
     }
 }
 
