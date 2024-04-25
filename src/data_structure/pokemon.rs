@@ -587,6 +587,11 @@ impl Pokemon {
         }
     }
 
+    pub fn friendship(&self) -> u8 {
+        let offset = self.pokemon_data.growth_offset;
+        self.pokemon_data.data[offset + 9..offset + 10][0]
+    }
+
     pub fn is_egg(&self) -> bool {
         let offset = self.pokemon_data.miscellaneous_offset;
         let iv_egg_ability = &self.pokemon_data.data[offset + 4..offset + 8];
@@ -830,6 +835,20 @@ impl Stats {
 
     pub fn sp_defense_iv(&self) -> u16 {
         self.hp_iv
+    }
+
+    pub fn highest_stat(&self, level: u8) -> (&'static str, u16){
+        let mut stats = [
+            ("HP", self.hp(level)),
+            ("Attack", self.attack(level)),
+            ("Defense", self.defense(level)),
+            ("Sp. Attack", self.sp_attack(level)),
+            ("Sp. Defense", self.sp_defense(level)),
+            ("Speed", self.speed(level))
+        ];
+
+        stats.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        stats[0]
     }
 }
 
