@@ -5,6 +5,7 @@ use csv::Reader;
 use lazy_static::lazy_static;
 use serde_json::Value;
 use std::fmt;
+use rand::Rng;
 
 use crate::data_structure::character_set::get_char;
 use crate::data_structure::save_data::TrainerID;
@@ -592,6 +593,41 @@ impl Pokemon {
         self.pokemon_data.data[offset + 9..offset + 10][0]
     }
 
+    pub fn personality_value(&self) -> u32 {
+        LittleEndian::read_u32(&self.personality_value)
+    }
+
+    pub fn infect_pokerus(&mut self) {
+        let offset = self.pokemon_data.miscellaneous_offset;
+        let mut pokerus = self.pokemon_data.data[offset..offset + 1][0];
+
+        let mut rng = rand::thread_rng();
+        let strain = rng.gen_range(1..=15);
+        let days =  (strain % 4) + 1;
+
+        pokerus = pokerus | (strain << 4);
+        pokerus = pokerus | days;
+
+        self.pokemon_data.data[offset..offset + 1].copy_from_slice(&[pokerus]);
+    }
+
+    pub fn cure_pokerus(&mut self) {
+        let offset = self.pokemon_data.miscellaneous_offset;
+        let mut pokerus = self.pokemon_data.data[offset..offset + 1][0];
+
+        //strain    = 0xF0  = 0b11110000
+        const STRAIN_MASK: u8 = 0xF0;
+
+        pokerus = pokerus & STRAIN_MASK;
+
+        self.pokemon_data.data[offset..offset + 1].copy_from_slice(&[pokerus]);
+    }
+
+    pub fn remove_pokerus(&mut self) {
+        let offset = self.pokemon_data.miscellaneous_offset;
+        self.pokemon_data.data[offset..offset + 1].copy_from_slice(&[0]);
+    }
+
     pub fn is_egg(&self) -> bool {
         let offset = self.pokemon_data.miscellaneous_offset;
         let iv_egg_ability = &self.pokemon_data.data[offset + 4..offset + 8];
@@ -618,10 +654,6 @@ impl Pokemon {
 
     fn nature_index(&self) -> usize {
         (self.personality_value() % 25) as usize
-    }
-
-    fn personality_value(&self) -> u32 {
-        LittleEndian::read_u32(&self.personality_value)
     }
 
     fn species_id(&self) -> u16 {
@@ -802,15 +834,15 @@ impl Stats {
     }
 
     pub fn speed_ev(&self) -> u16 {
-        self.hp_ev
+        self.speed_ev
     }
 
     pub fn sp_attack_ev(&self) -> u16 {
-        self.hp_ev
+        self.sp_attack_ev
     }
 
     pub fn sp_defense_ev(&self) -> u16 {
-        self.hp_ev
+        self.sp_defense_ev
     }
 
     pub fn hp_iv(&self) -> u16 {
@@ -826,15 +858,15 @@ impl Stats {
     }
 
     pub fn speed_iv(&self) -> u16 {
-        self.hp_iv
+        self.speed_iv
     }
 
     pub fn sp_attack_iv(&self) -> u16 {
-        self.hp_iv
+        self.sp_attack_iv
     }
 
     pub fn sp_defense_iv(&self) -> u16 {
-        self.hp_iv
+        self.sp_defense_iv
     }
 
     pub fn highest_stat(&self, level: u8) -> (&'static str, u16){
