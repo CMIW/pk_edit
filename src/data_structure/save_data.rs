@@ -127,6 +127,13 @@ impl SaveFile {
         save
     }
 
+    pub fn player_name(&self) -> Vec<u8> {
+        let section = self.get_section(SectionID::TrainerInfo).unwrap();
+        let section_data_buffer = section.data(&self.data);
+
+        section_data_buffer[0x0000..0x0000 + 7].to_vec()
+    }
+
     pub fn get_party(&self) -> Vec<Pokemon> {
         let game_code = self.get_game_code();
         let section = self.get_section(SectionID::TeamItems).unwrap();
