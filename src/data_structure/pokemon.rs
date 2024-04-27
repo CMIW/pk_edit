@@ -628,6 +628,33 @@ impl Pokemon {
         self.pokemon_data.data[offset..offset + 1].copy_from_slice(&[0]);
     }
 
+    pub fn raw_data(&self) -> [u8; 80] {
+        let mut raw_data: [u8; 80] = [0; 80];
+        let mut data: [u8; 48] = [0; 48];
+
+        let ecryption_key = LittleEndian::read_u32(&self.personality_value)
+            ^ LittleEndian::read_u32(&self.ot_id);
+
+        pokemon_data_encryption(ecryption_key, &self.pokemon_data.data, &mut data);
+
+        raw_data[0x00..0x04].copy_from_slice(&self.personality_value);
+        raw_data[0x04..0x08].copy_from_slice(&self.ot_id);
+        raw_data[0x08..0x12].copy_from_slice(&self.nickname);
+        raw_data[0x12..0x13].copy_from_slice(&self.language);
+        raw_data[0x13..0x14].copy_from_slice(&self.misc_flags);
+        raw_data[0x14..0x1B].copy_from_slice(&self.ot_name);
+        raw_data[0x1B..0x1C].copy_from_slice(&self.markings);
+        raw_data[0x1C..0x1E].copy_from_slice(&self.checksum);
+        raw_data[0x1E..0x20].copy_from_slice(&self._padding);
+        raw_data[0x20..0x50].copy_from_slice(&data);
+
+        raw_data
+    }
+
+    pub fn update_checksum(&mut self) {
+        self.checksum.copy_from_slice(&self.pokemon_data.checksum().to_le_bytes())
+    }
+
     pub fn is_egg(&self) -> bool {
         let offset = self.pokemon_data.miscellaneous_offset;
         let iv_egg_ability = &self.pokemon_data.data[offset + 4..offset + 8];

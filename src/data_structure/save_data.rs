@@ -159,6 +159,26 @@ impl SaveFile {
         self.pc_buffer.is_empty()
     }
 
+    pub fn save_pokemon(&mut self, storage: StorageType, pokemon: Pokemon) {
+        match storage {
+            StorageType::Party => {
+                let offset = pokemon.ofsset();
+
+                self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data());
+                let section = self.get_section(SectionID::TeamItems).unwrap();
+                section.write_checksum(&mut self.data);
+            },
+            StorageType::PC => {
+                self.pc_buffer.save_pokemon(pokemon, &mut self.data);
+            },
+            _ => {},
+        }
+    }
+
+    pub fn raw_data(&self) -> Vec<u8> {
+        self.data.to_vec()
+    }
+
     fn init_pc_buffer(&mut self) {
         let current_save = self.current_save();
 
@@ -206,12 +226,12 @@ impl SaveFile {
         LittleEndian::read_u32(&section_data_buffer[0x00AC..0x00AC + 4])
     }
 
-    fn get_section(&self, id: SectionID) -> Option<&Section> {
+    fn get_section(&self, id: SectionID) -> Option<Section> {
         let current_save = self.current_save();
 
         current_save
             .iter()
-            .find(|section| section.id(&self.data) == id)
+            .find(|section| section.id(&self.data) == id).copied()
     }
 }
 
@@ -311,6 +331,24 @@ impl PCBuffer {
         list
     }
 
+    fn save_pokemon(&mut self, pokemon: Pokemon, buffer: &mut [u8]) {
+        let offset = pokemon.ofsset();
+
+        self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data());
+
+        for (i, section) in self.data.chunks(PC_BUFFER_SECTION_SIZE).enumerate() {
+            if i == 8 {
+                buffer[self.buffer[i].offset..self.buffer[i].offset + PC_BUFFER_I_SECTION_SIZE]
+                    .copy_from_slice(&section);
+            } else {
+                buffer[self.buffer[i].offset..self.buffer[i].offset + PC_BUFFER_SECTION_SIZE]
+                    .copy_from_slice(&section);
+            }
+
+            self.buffer[i].write_checksum(buffer);
+        }
+    }
+
     fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
@@ -406,4 +444,11 @@ impl From<SectionID> for i32 {
             SectionID::NA => 14,
         }
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum StorageType {
+    PC,
+    Party,
+    None,
 }
