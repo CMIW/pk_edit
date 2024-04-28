@@ -85,7 +85,7 @@ const GAME_SAVE_B_OFFSET: usize = 0x00E000;
 /// Representation of the Save File.
 ///
 /// The Generation III save file is broken up into two game save blocks (Game Save A, Game Save B), each of which is broken up into 14 4KB sections.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SaveFile {
     game_save_a: [Section; NUMBER_GAME_SAVE_SECTIONS],
     game_save_b: [Section; NUMBER_GAME_SAVE_SECTIONS],
@@ -132,6 +132,13 @@ impl SaveFile {
         let section_data_buffer = section.data(&self.data);
 
         section_data_buffer[0x0000..0x0000 + 7].to_vec()
+    }
+
+    pub fn trainer_id(&self) -> Vec<u8> {
+        let section = self.get_section(SectionID::TrainerInfo).unwrap();
+        let section_data_buffer = section.data(&self.data);
+
+        section_data_buffer[0x000A..0x000A + 4].to_vec()
     }
 
     pub fn get_party(&self) -> Vec<Pokemon> {
@@ -297,7 +304,7 @@ impl Section {
 /// Representation of the PC Buffer.
 ///
 /// The Generation III save file is broken up into two game save blocks (Game Save A, Game Save B), each of which is broken up into 14 4KB sections.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PCBuffer {
     buffer: [Section; 9],
     data: Vec<u8>,
@@ -453,9 +460,10 @@ impl From<SectionID> for i32 {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub enum StorageType {
     PC,
     Party,
+    #[default]
     None,
 }

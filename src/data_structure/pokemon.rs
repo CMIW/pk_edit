@@ -136,7 +136,7 @@ const EXPERIENCE_TABLE: [[u32; 7]; 100] = [
     [600000, 800000, 1000000, 1059860, 1250000, 1640000, 100],
 ];
 
-const NATURE: [&str; 25] = [
+pub const NATURE: [&str; 25] = [
     "Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish", "Lax",
     "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet", "Bashful", "Rash",
     "Calm", "Gentle", "Sassy", "Careful", "Quirky",
@@ -496,7 +496,7 @@ impl Pokemon {
         }
 
         let item_name = ITEMS_G3[held_item_index]
-            .get(3)
+            .get(1)
             .unwrap()
             .to_string()
             .replace('*', "");
@@ -593,6 +593,11 @@ impl Pokemon {
         self.pokemon_data.data[offset + 9..offset + 10][0]
     }
 
+    pub fn set_friendship(&mut self, value: u8) {
+        let offset = self.pokemon_data.growth_offset;
+        self.pokemon_data.data[offset + 9..offset + 10].copy_from_slice(&value.to_le_bytes());
+    }
+
     pub fn personality_value(&self) -> u32 {
         LittleEndian::read_u32(&self.personality_value)
     }
@@ -626,6 +631,17 @@ impl Pokemon {
     pub fn remove_pokerus(&mut self) {
         let offset = self.pokemon_data.miscellaneous_offset;
         self.pokemon_data.data[offset..offset + 1].copy_from_slice(&[0]);
+    }
+
+    pub fn give_item(&mut self, item: &str) {
+        let offset = self.pokemon_data.growth_offset;
+        let held_item_index = if item == "-" {
+            0
+        } else {
+            ITEMS_G3.iter().find(|i| i.get(1).unwrap() == item).unwrap().get(0).unwrap().parse::<u16>().unwrap()
+        };
+
+        self.pokemon_data.data[offset + 2..offset + 4].copy_from_slice(&held_item_index.to_le_bytes())
     }
 
     pub fn raw_data(&self) -> [u8; 80] {
@@ -1127,6 +1143,18 @@ pub fn transpose_item(name: &str) -> Option<usize> {
     let item = ITEMS.iter().find(|&item| item["name"]["english"] == name);
 
     item.map(|item| item["id"].as_u64().unwrap() as usize)
+}
+
+pub fn items() -> Vec<String>{
+    let items = ITEMS.iter().filter(|&item| item["type"] != "Key Items").filter(|&item| item["name"]["english"] != serde_json::value::Value::Null).map(|item| item["name"]["english"].as_str().unwrap());
+
+    let items_g3: Vec<_> = ITEMS_G3.iter().filter(|item| item.get(1) != Some("unknown")).map(|item| item.get(1).unwrap()).collect();
+
+    let mut items: Vec<String> =  items.filter(|item| items_g3.contains(item)).map(|item| item.to_string()).collect();
+
+    items.push(String::from("-"));
+
+    items
 }
 
 fn growth_index(growth: &str) -> usize {
