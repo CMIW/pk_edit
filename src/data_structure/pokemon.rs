@@ -174,16 +174,20 @@ const NATURE_MODIFIER: [[f32; 5]; 25] = [
 const POKEDEX_BYTES: &[u8] = include_bytes!("../../pokedex.csv");
 const POKEDEX_JSON_BYTES: &[u8] = include_bytes!("../../pokedex.json");
 const MOVES_BYTES: &[u8] = include_bytes!("../../moves.json");
+const MOVES_G3_BYTES: &[u8] = include_bytes!("../../moves.csv");
 const ITEMS_BYTES: &[u8] = include_bytes!("../../items.json");
 const ITEMS_G3_BYTES: &[u8] = include_bytes!("../../items.csv");
 
 lazy_static! {
+    static ref POKEDEX_JSON: Vec<Value> = serde_json::from_reader(POKEDEX_JSON_BYTES).unwrap();
     static ref POKEDEX: Vec<csv::StringRecord> = Reader::from_reader(POKEDEX_BYTES)
         .records()
         .map(|record| record.unwrap())
         .collect();
-    static ref POKEDEX_JSON: Vec<Value> = serde_json::from_reader(POKEDEX_JSON_BYTES).unwrap();
     static ref MOVES: Vec<Value> = serde_json::from_reader(MOVES_BYTES).unwrap();
+    static ref MOVES_G3: Vec<csv::StringRecord> = Reader::from_reader(MOVES_G3_BYTES).records()
+        .map(|record| record.unwrap())
+        .collect();
     static ref ITEMS: Vec<Value> = serde_json::from_reader(ITEMS_BYTES).unwrap();
     static ref ITEMS_G3: Vec<csv::StringRecord> = Reader::from_reader(ITEMS_G3_BYTES)
         .records()
@@ -204,6 +208,7 @@ pub struct Pokemon {
     checksum: [u8; 2],
     _padding: [u8; 2],
     pokemon_data: PokemonData,
+    stats: Stats,
 }
 
 impl Pokemon {
@@ -245,7 +250,7 @@ impl Pokemon {
         checksum.copy_from_slice(&buffer[0x1C..0x1E]);
         _padding.copy_from_slice(&buffer[0x1E..0x20]);
 
-        Pokemon {
+        let mut pokemon = Pokemon {
             offset,
             personality_value,
             ot_id,
@@ -257,7 +262,12 @@ impl Pokemon {
             checksum,
             _padding,
             pokemon_data,
+            stats: Stats::default(),
         }
+
+        pokemon.init_stats();
+
+        pokemon
     }
 
     pub fn ofsset(&self) -> usize {
@@ -387,6 +397,23 @@ impl Pokemon {
         }
 
         level as u8
+    }
+
+    pub fn set_level(&mut self, level: u8) {
+        let index = self.nat_dex_number();
+
+        let pokemon = POKEDEX
+            .iter()
+            .find(|mon| mon.get(0).unwrap().replace('#', "").parse::<u16>().unwrap() == index);
+
+        let growth = pokemon.unwrap().get(11);
+
+        let growth_index = growth_index(growth.unwrap());
+
+        let experience = EXPERIENCE_TABLE[(level-1) as usize][growth_index];
+
+        let offset = self.pokemon_data.growth_offset;
+        self.pokemon_data.data[offset + 4..offset + 8].copy_from_slice(&experience.to_le_bytes());
     }
 
     pub fn typing(&self) -> Option<(String, Option<String>)> {
@@ -545,6 +572,10 @@ impl Pokemon {
     }
 
     pub fn stats(&self) -> Stats {
+        self.stats
+    }
+
+    fn init_stats(&mut self) {
         let index = self.nat_dex_number().saturating_sub(1) as usize;
         let nature_index = self.nature_index();
 
@@ -555,7 +586,7 @@ impl Pokemon {
 
         let ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
 
-        Stats {
+        self.stats = Stats {
             // Base
             hp: base_stats["HP"].as_u64().unwrap() as u16,
             attack: base_stats["Attack"].as_u64().unwrap() as u16,
@@ -585,7 +616,7 @@ impl Pokemon {
             sp_defense_iv: ((ivs & 0x3E000000) >> 25) as u16,
             // Nature Modifiers
             n_mod: NATURE_MODIFIER[nature_index],
-        }
+        };
     }
 
     pub fn friendship(&self) -> u8 {
@@ -671,6 +702,25 @@ impl Pokemon {
         self.checksum.copy_from_slice(&self.pokemon_data.checksum().to_le_bytes())
     }
 
+    pub fn lowest_level(&self) -> u8 {
+        let mut level: u8 = 1;
+        if !self.is_empty() {
+            let index = self.nat_dex_number().saturating_sub(1) as usize;
+
+            let prev_evo = &POKEDEX_JSON[index]["evolution"]["prev"];
+
+            if prev_evo != &Value::Null {
+                if prev_evo[1].as_str().unwrap().contains("Level") {
+                    let mut level_str = prev_evo[1].as_str().unwrap().to_string();
+                    level_str.retain(|c| c.is_numeric());
+                    level = level_str.parse::<u8>().unwrap();
+                }
+            }
+        }
+
+        level
+    }
+
     pub fn is_egg(&self) -> bool {
         let offset = self.pokemon_data.miscellaneous_offset;
         let iv_egg_ability = &self.pokemon_data.data[offset + 4..offset + 8];
@@ -693,6 +743,10 @@ impl Pokemon {
         }
 
         false
+    }
+
+    fn save_stats(&mut self) {
+
     }
 
     fn nature_index(&self) -> usize {
@@ -780,7 +834,7 @@ impl Default for PokemonData {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct Stats {
     // Base
     hp: u16,
@@ -1202,4 +1256,8 @@ fn gender_threshold(index: usize) -> u32 {
 fn calc_stat(base: u16, iv: u16, ev: u16, n_mod: f32, level: u8) -> u16 {
     let level: u16 = level as u16;
     (((((2 * base + iv + (ev / 4)) * level) / 100) + 5) as f32 * n_mod).floor() as u16
+}
+
+pub fn species_list() -> Vec<String>{
+    POKEDEX_JSON[..386].iter().map(|pk| pk["name"]["english"].as_str().unwrap().to_string()).collect::<Vec<String>>()
 }
