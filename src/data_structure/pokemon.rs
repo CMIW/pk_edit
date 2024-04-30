@@ -3,9 +3,9 @@
 use byteorder::{ByteOrder, LittleEndian};
 use csv::Reader;
 use lazy_static::lazy_static;
+use rand::Rng;
 use serde_json::Value;
 use std::fmt;
-use rand::Rng;
 
 use crate::data_structure::character_set::get_char;
 use crate::data_structure::save_data::TrainerID;
@@ -185,7 +185,8 @@ lazy_static! {
         .map(|record| record.unwrap())
         .collect();
     static ref MOVES: Vec<Value> = serde_json::from_reader(MOVES_BYTES).unwrap();
-    static ref MOVES_G3: Vec<csv::StringRecord> = Reader::from_reader(MOVES_G3_BYTES).records()
+    static ref MOVES_G3: Vec<csv::StringRecord> = Reader::from_reader(MOVES_G3_BYTES)
+        .records()
         .map(|record| record.unwrap())
         .collect();
     static ref ITEMS: Vec<Value> = serde_json::from_reader(ITEMS_BYTES).unwrap();
@@ -263,7 +264,7 @@ impl Pokemon {
             _padding,
             pokemon_data,
             stats: Stats::default(),
-        }
+        };
 
         pokemon.init_stats();
 
@@ -410,7 +411,7 @@ impl Pokemon {
 
         let growth_index = growth_index(growth.unwrap());
 
-        let experience = EXPERIENCE_TABLE[(level-1) as usize][growth_index];
+        let experience = EXPERIENCE_TABLE[(level - 1) as usize][growth_index];
 
         let offset = self.pokemon_data.growth_offset;
         self.pokemon_data.data[offset + 4..offset + 8].copy_from_slice(&experience.to_le_bytes());
@@ -571,8 +572,47 @@ impl Pokemon {
         }
     }
 
+    // doesn't work, don't know why!!
+    fn _set_nature(&mut self, nature: &str) {
+        let nature_index = NATURE.iter().position(|n| n == &nature).unwrap();
+        let new_p = ((self.personality_value() / 100) * 100) + nature_index as u32;
+        self.personality_value.copy_from_slice(&new_p.to_le_bytes());
+    }
+
+    fn save_stats(&mut self) {
+        let ev_offset = self.pokemon_data.ev_offset;
+        let iv_offset = self.pokemon_data.miscellaneous_offset;
+
+        self.pokemon_data.data[ev_offset..ev_offset + 1].copy_from_slice(&[self.stats.hp_ev as u8]);
+        self.pokemon_data.data[ev_offset + 1..ev_offset + 2]
+            .copy_from_slice(&[self.stats.attack_ev as u8]);
+        self.pokemon_data.data[ev_offset + 2..ev_offset + 3]
+            .copy_from_slice(&[self.stats.defense_ev as u8]);
+        self.pokemon_data.data[ev_offset + 4..ev_offset + 5]
+            .copy_from_slice(&[self.stats.sp_attack_ev as u8]);
+        self.pokemon_data.data[ev_offset + 5..ev_offset + 6]
+            .copy_from_slice(&[self.stats.sp_defense_ev as u8]);
+        self.pokemon_data.data[ev_offset + 3..ev_offset + 4]
+            .copy_from_slice(&[self.stats.speed_ev as u8]);
+
+        let mut ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
+
+        ivs |= self.stats.hp_iv as u32;
+        ivs |= (self.stats.attack_iv as u32) << 5;
+        ivs |= (self.stats.defense_iv as u32) << 10;
+        ivs |= (self.stats.speed_iv as u32) << 15;
+        ivs |= (self.stats.sp_attack_iv as u32) << 20;
+        ivs |= (self.stats.sp_defense_iv as u32) << 25;
+
+        self.pokemon_data.data[iv_offset + 4..iv_offset + 8].copy_from_slice(&ivs.to_le_bytes());
+    }
+
     pub fn stats(&self) -> Stats {
         self.stats
+    }
+
+    pub fn stats_mut(&mut self) -> &mut Stats {
+        &mut self.stats
     }
 
     fn init_stats(&mut self) {
@@ -639,10 +679,10 @@ impl Pokemon {
 
         let mut rng = rand::thread_rng();
         let strain = rng.gen_range(1..=15);
-        let days =  (strain % 4) + 1;
+        let days = (strain % 4) + 1;
 
-        pokerus = pokerus | (strain << 4);
-        pokerus = pokerus | days;
+        pokerus |= strain << 4;
+        pokerus |= days;
 
         self.pokemon_data.data[offset..offset + 1].copy_from_slice(&[pokerus]);
     }
@@ -654,7 +694,7 @@ impl Pokemon {
         //strain    = 0xF0  = 0b11110000
         const STRAIN_MASK: u8 = 0xF0;
 
-        pokerus = pokerus & STRAIN_MASK;
+        pokerus &= STRAIN_MASK;
 
         self.pokemon_data.data[offset..offset + 1].copy_from_slice(&[pokerus]);
     }
@@ -669,18 +709,26 @@ impl Pokemon {
         let held_item_index = if item == "-" {
             0
         } else {
-            ITEMS_G3.iter().find(|i| i.get(1).unwrap() == item).unwrap().get(0).unwrap().parse::<u16>().unwrap()
+            ITEMS_G3
+                .iter()
+                .find(|i| i.get(1).unwrap() == item)
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .parse::<u16>()
+                .unwrap()
         };
 
-        self.pokemon_data.data[offset + 2..offset + 4].copy_from_slice(&held_item_index.to_le_bytes())
+        self.pokemon_data.data[offset + 2..offset + 4]
+            .copy_from_slice(&held_item_index.to_le_bytes())
     }
 
     pub fn raw_data(&self) -> [u8; 80] {
         let mut raw_data: [u8; 80] = [0; 80];
         let mut data: [u8; 48] = [0; 48];
 
-        let ecryption_key = LittleEndian::read_u32(&self.personality_value)
-            ^ LittleEndian::read_u32(&self.ot_id);
+        let ecryption_key =
+            LittleEndian::read_u32(&self.personality_value) ^ LittleEndian::read_u32(&self.ot_id);
 
         pokemon_data_encryption(ecryption_key, &self.pokemon_data.data, &mut data);
 
@@ -699,7 +747,9 @@ impl Pokemon {
     }
 
     pub fn update_checksum(&mut self) {
-        self.checksum.copy_from_slice(&self.pokemon_data.checksum().to_le_bytes())
+        self.save_stats();
+        self.checksum
+            .copy_from_slice(&self.pokemon_data.checksum().to_le_bytes())
     }
 
     pub fn lowest_level(&self) -> u8 {
@@ -709,12 +759,10 @@ impl Pokemon {
 
             let prev_evo = &POKEDEX_JSON[index]["evolution"]["prev"];
 
-            if prev_evo != &Value::Null {
-                if prev_evo[1].as_str().unwrap().contains("Level") {
-                    let mut level_str = prev_evo[1].as_str().unwrap().to_string();
-                    level_str.retain(|c| c.is_numeric());
-                    level = level_str.parse::<u8>().unwrap();
-                }
+            if prev_evo != &Value::Null && prev_evo[1].as_str().unwrap().contains("Level") {
+                let mut level_str = prev_evo[1].as_str().unwrap().to_string();
+                level_str.retain(|c| c.is_numeric());
+                level = level_str.parse::<u8>().unwrap();
             }
         }
 
@@ -743,10 +791,6 @@ impl Pokemon {
         }
 
         false
-    }
-
-    fn save_stats(&mut self) {
-
     }
 
     fn nature_index(&self) -> usize {
@@ -844,19 +888,19 @@ pub struct Stats {
     sp_defense: u16,
     speed: u16,
     // Effort Values
-    hp_ev: u16,
-    attack_ev: u16,
-    defense_ev: u16,
-    sp_attack_ev: u16,
-    sp_defense_ev: u16,
-    speed_ev: u16,
+    pub hp_ev: u16,
+    pub attack_ev: u16,
+    pub defense_ev: u16,
+    pub sp_attack_ev: u16,
+    pub sp_defense_ev: u16,
+    pub speed_ev: u16,
     // Individual Values
-    hp_iv: u16,
-    attack_iv: u16,
-    defense_iv: u16,
-    sp_attack_iv: u16,
-    sp_defense_iv: u16,
-    speed_iv: u16,
+    pub hp_iv: u16,
+    pub attack_iv: u16,
+    pub defense_iv: u16,
+    pub sp_attack_iv: u16,
+    pub sp_defense_iv: u16,
+    pub speed_iv: u16,
     // Nature Modifiers
     n_mod: [f32; 5],
 }
@@ -918,66 +962,108 @@ impl Stats {
         )
     }
 
-    pub fn hp_ev(&self) -> u16 {
-        self.hp_ev
-    }
-
-    pub fn attack_ev(&self) -> u16 {
-        self.attack_ev
-    }
-
-    pub fn defense_ev(&self) -> u16 {
-        self.defense_ev
-    }
-
-    pub fn speed_ev(&self) -> u16 {
-        self.speed_ev
-    }
-
-    pub fn sp_attack_ev(&self) -> u16 {
-        self.sp_attack_ev
-    }
-
-    pub fn sp_defense_ev(&self) -> u16 {
-        self.sp_defense_ev
-    }
-
-    pub fn hp_iv(&self) -> u16 {
-        self.hp_iv
-    }
-
-    pub fn attack_iv(&self) -> u16 {
-        self.attack_iv
-    }
-
-    pub fn defense_iv(&self) -> u16 {
-        self.defense_iv
-    }
-
-    pub fn speed_iv(&self) -> u16 {
-        self.speed_iv
-    }
-
-    pub fn sp_attack_iv(&self) -> u16 {
-        self.sp_attack_iv
-    }
-
-    pub fn sp_defense_iv(&self) -> u16 {
-        self.sp_defense_iv
-    }
-
-    pub fn highest_stat(&self, level: u8) -> (&'static str, u16){
+    pub fn highest_stat(&self, level: u8) -> (&'static str, u16) {
         let mut stats = [
             ("HP", self.hp(level)),
             ("Attack", self.attack(level)),
             ("Defense", self.defense(level)),
             ("Sp. Attack", self.sp_attack(level)),
             ("Sp. Defense", self.sp_defense(level)),
-            ("Speed", self.speed(level))
+            ("Speed", self.speed(level)),
         ];
 
         stats.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         stats[0]
+    }
+
+    pub fn update_ivs(&mut self, iv: &str, new_iv: u16) {
+        match iv {
+            "HP" => {
+                self.hp_iv = recalc_iv(new_iv);
+            }
+            "Attack" => {
+                self.attack_iv = recalc_iv(new_iv);
+            }
+            "Defense" => {
+                self.defense_iv = recalc_iv(new_iv);
+            }
+            "Sp. Atk" => {
+                self.sp_attack_iv = recalc_iv(new_iv);
+            }
+            "Sp. Def" => {
+                self.sp_defense_iv = recalc_iv(new_iv);
+            }
+            "Speed" => {
+                self.speed_iv = recalc_iv(new_iv);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn update_evs(&mut self, ev: &str, new_ev: u16) {
+        match ev {
+            "HP" => {
+                let new_total = new_ev
+                    + self.attack_ev
+                    + self.defense_ev
+                    + self.sp_attack_ev
+                    + self.sp_defense_ev
+                    + self.speed_ev;
+
+                self.hp_ev = recalc_ev(new_ev, new_total);
+            }
+            "Attack" => {
+                let new_total = new_ev
+                    + self.hp_ev
+                    + self.defense_ev
+                    + self.sp_attack_ev
+                    + self.sp_defense_ev
+                    + self.speed_ev;
+
+                self.attack_ev = recalc_ev(new_ev, new_total);
+            }
+            "Defense" => {
+                let new_total = new_ev
+                    + self.hp_ev
+                    + self.attack_ev
+                    + self.sp_attack_ev
+                    + self.sp_defense_ev
+                    + self.speed_ev;
+
+                self.defense_ev = recalc_ev(new_ev, new_total);
+            }
+            "Sp. Atk" => {
+                let new_total = new_ev
+                    + self.hp_ev
+                    + self.attack_ev
+                    + self.defense_ev
+                    + self.sp_defense_ev
+                    + self.speed_ev;
+
+                self.sp_attack_ev = recalc_ev(new_ev, new_total);
+            }
+            "Sp. Def" => {
+                let new_total = new_ev
+                    + self.hp_ev
+                    + self.attack_ev
+                    + self.defense_ev
+                    + self.sp_attack_ev
+                    + self.speed_ev;
+
+                self.sp_defense_ev = recalc_ev(new_ev, new_total);
+            }
+            "Speed" => {
+                let new_total = new_ev
+                    + self.hp_ev
+                    + self.attack_ev
+                    + self.defense_ev
+                    + self.sp_attack_ev
+                    + self.sp_defense_ev;
+
+                self.speed_ev = recalc_ev(new_ev, new_total);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1199,12 +1285,23 @@ pub fn transpose_item(name: &str) -> Option<usize> {
     item.map(|item| item["id"].as_u64().unwrap() as usize)
 }
 
-pub fn items() -> Vec<String>{
-    let items = ITEMS.iter().filter(|&item| item["type"] != "Key Items").filter(|&item| item["name"]["english"] != serde_json::value::Value::Null).map(|item| item["name"]["english"].as_str().unwrap());
+pub fn items() -> Vec<String> {
+    let items = ITEMS
+        .iter()
+        .filter(|&item| item["type"] != "Key Items")
+        .filter(|&item| item["name"]["english"] != serde_json::value::Value::Null)
+        .map(|item| item["name"]["english"].as_str().unwrap());
 
-    let items_g3: Vec<_> = ITEMS_G3.iter().filter(|item| item.get(1) != Some("unknown")).map(|item| item.get(1).unwrap()).collect();
+    let items_g3: Vec<_> = ITEMS_G3
+        .iter()
+        .filter(|item| item.get(1) != Some("unknown"))
+        .map(|item| item.get(1).unwrap())
+        .collect();
 
-    let mut items: Vec<String> =  items.filter(|item| items_g3.contains(item)).map(|item| item.to_string()).collect();
+    let mut items: Vec<String> = items
+        .filter(|item| items_g3.contains(item))
+        .map(|item| item.to_string())
+        .collect();
 
     items.push(String::from("-"));
 
@@ -1258,6 +1355,34 @@ fn calc_stat(base: u16, iv: u16, ev: u16, n_mod: f32, level: u8) -> u16 {
     (((((2 * base + iv + (ev / 4)) * level) / 100) + 5) as f32 * n_mod).floor() as u16
 }
 
-pub fn species_list() -> Vec<String>{
-    POKEDEX_JSON[..386].iter().map(|pk| pk["name"]["english"].as_str().unwrap().to_string()).collect::<Vec<String>>()
+fn recalc_ev(new_ev: u16, new_total: u16) -> u16 {
+    if new_total < 510 && new_ev < 252 {
+        new_ev
+    } else if new_total < 510 && new_ev > 252 {
+        new_ev.saturating_sub(new_ev.saturating_sub(252))
+    } else {
+        new_ev.saturating_sub(new_total.saturating_sub(510))
+    }
+}
+
+fn recalc_iv(new_iv: u16) -> u16 {
+    if new_iv < 31 {
+        new_iv
+    } else {
+        new_iv.saturating_sub(new_iv.saturating_sub(31))
+    }
+}
+
+pub fn species_list() -> Vec<String> {
+    POKEDEX_JSON[..386]
+        .iter()
+        .map(|pk| pk["name"]["english"].as_str().unwrap().to_string())
+        .collect::<Vec<String>>()
+}
+
+pub fn moves() -> Vec<String> {
+    MOVES_G3
+        .iter()
+        .map(|item| item.get(0).unwrap().to_string())
+        .collect::<Vec<String>>()
 }

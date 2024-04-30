@@ -131,7 +131,7 @@ impl SaveFile {
         let section = self.get_section(SectionID::TrainerInfo).unwrap();
         let section_data_buffer = section.data(&self.data);
 
-        section_data_buffer[0x0000..0x0000 + 7].to_vec()
+        section_data_buffer[0x0000..7].to_vec()
     }
 
     pub fn trainer_id(&self) -> Vec<u8> {
@@ -181,11 +181,11 @@ impl SaveFile {
                 self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data());
                 let section = self.get_section(SectionID::TeamItems).unwrap();
                 section.write_checksum(&mut self.data);
-            },
+            }
             StorageType::PC => {
                 self.pc_buffer.save_pokemon(pokemon, &mut self.data);
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 
@@ -245,7 +245,8 @@ impl SaveFile {
 
         current_save
             .iter()
-            .find(|section| section.id(&self.data) == id).copied()
+            .find(|section| section.id(&self.data) == id)
+            .copied()
     }
 }
 
@@ -353,10 +354,10 @@ impl PCBuffer {
         for (i, section) in self.data.chunks(PC_BUFFER_SECTION_SIZE).enumerate() {
             if i == 8 {
                 buffer[self.buffer[i].offset..self.buffer[i].offset + PC_BUFFER_I_SECTION_SIZE]
-                    .copy_from_slice(&section);
+                    .copy_from_slice(section);
             } else {
                 buffer[self.buffer[i].offset..self.buffer[i].offset + PC_BUFFER_SECTION_SIZE]
-                    .copy_from_slice(&section);
+                    .copy_from_slice(section);
             }
 
             self.buffer[i].write_checksum(buffer);
