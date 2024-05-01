@@ -64,6 +64,7 @@ use std::convert::From;
 use std::default::Default;
 use thiserror::Error;
 
+use crate::data_structure::character_set::get_char;
 use crate::data_structure::pokemon::Pokemon;
 
 //const SIGNATURE_MAGIC_NUMBER: usize = 0x08012025;
@@ -127,14 +128,22 @@ impl SaveFile {
         save
     }
 
-    pub fn player_name(&self) -> Vec<u8> {
+    pub fn is_empty(&self) -> bool {
+        if self.data.len() == 0 {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn ot_name(&self) -> Vec<u8> {
         let section = self.get_section(SectionID::TrainerInfo).unwrap();
         let section_data_buffer = section.data(&self.data);
 
         section_data_buffer[0x0000..7].to_vec()
     }
 
-    pub fn trainer_id(&self) -> Vec<u8> {
+    pub fn ot_id(&self) -> Vec<u8> {
         let section = self.get_section(SectionID::TrainerInfo).unwrap();
         let section_data_buffer = section.data(&self.data);
 

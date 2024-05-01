@@ -7,7 +7,7 @@ use rand::Rng;
 use serde_json::Value;
 use std::fmt;
 
-use crate::data_structure::character_set::get_char;
+use crate::data_structure::character_set::{get_char, get_code};
 use crate::data_structure::save_data::TrainerID;
 
 const SPECIES: [u16; 136] = [
@@ -279,6 +279,25 @@ impl Pokemon {
         self.ot_id.into()
     }
 
+    fn set_ot_id(&mut self, ot_id: &[u8]) {
+        self.ot_id.copy_from_slice(ot_id);
+    }
+
+    pub fn is_bad_egg(&self) -> bool {
+        let flag = self.misc_flags[0] & 0b00000001;
+
+        if flag == 1 {
+            true
+        } else {
+            false
+        }
+
+    }
+
+    fn set_misc_flags(&mut self, flags: u8) {
+        self.misc_flags.copy_from_slice(&[flags]);
+    }
+
     pub fn nickname(&self) -> String {
         let nickname = &self
             .nickname
@@ -290,6 +309,11 @@ impl Pokemon {
         let nickname = nickname.split(' ').next().unwrap();
 
         nickname.to_string()
+    }
+
+    fn set_nickname(&mut self, nickname: &str) {
+        let name: Vec<u8> = format!("{: <10}", nickname).chars().map(|s| get_code(&s.to_string())).collect();
+        self.nickname.copy_from_slice(&name);
     }
 
     pub fn language(&self) -> Language {
@@ -309,6 +333,10 @@ impl Pokemon {
         ot_name.to_string()
     }
 
+    fn set_ot_name(&mut self, ot_name: &[u8]) {
+        self.ot_name.copy_from_slice(ot_name);
+    }
+
     pub fn checksum(&self) -> u16 {
         LittleEndian::read_u16(&self.checksum)
     }
@@ -322,6 +350,19 @@ impl Pokemon {
         } else {
             "".to_string()
         }
+    }
+
+    fn set_species(&mut self, species: &str) {
+        let mut id = POKEDEX_JSON.iter().find(|p| p["name"]["english"] == species).unwrap()["id"].as_u64().unwrap() as u16;
+
+        if id == 0 {
+            id = 412;
+        } else if id >= 252 {
+            id = SPECIES[id as usize- 251];
+        }
+
+        let offset = self.pokemon_data.growth_offset;
+        self.pokemon_data.data[offset..offset + 2].copy_from_slice(&id.to_le_bytes());
     }
 
     pub fn nat_dex_number(&self) -> u16 {
@@ -542,6 +583,11 @@ impl Pokemon {
         ((LittleEndian::read_u16(origins_info) & BITS_MASK) >> 11) as usize
     }
 
+    fn set_pokeball_caught(&mut self, ball_id: u16) {
+        let offset = self.pokemon_data.miscellaneous_offset;
+        self.pokemon_data.data[offset + 2..offset + 4].copy_from_slice(&(ball_id << 11).to_le_bytes())
+    }
+
     pub fn pokerus_status(&self) -> Pokerus {
         let offset = self.pokemon_data.miscellaneous_offset;
         let pokerus = &self.pokemon_data.data[offset..offset + 1];
@@ -671,6 +717,10 @@ impl Pokemon {
 
     pub fn personality_value(&self) -> u32 {
         LittleEndian::read_u32(&self.personality_value)
+    }
+
+    fn set_personality_value(&mut self, value: u32) {
+        self.personality_value.copy_from_slice(&value.to_le_bytes());
     }
 
     pub fn infect_pokerus(&mut self) {
@@ -1371,6 +1421,29 @@ fn recalc_iv(new_iv: u16) -> u16 {
     } else {
         new_iv.saturating_sub(new_iv.saturating_sub(31))
     }
+}
+
+pub fn gen_pokemon_from_species(pokemon: &mut Pokemon, species: &str, ot_name: &[u8], ot_id: &[u8]) -> Pokemon {
+    let mut rng = rand::thread_rng();
+    let p: u32 = rng.gen();
+
+    pokemon.set_personality_value(p);
+
+    pokemon.set_species(species);
+    pokemon.set_level(pokemon.lowest_level());
+    pokemon.set_pokeball_caught(4);
+    pokemon.set_ot_id(ot_id);
+    pokemon.set_ot_name(ot_name);
+    pokemon.set_nickname(&species.to_uppercase());
+
+    pokemon.init_stats();
+    pokemon.set_misc_flags(0);
+
+    pokemon.update_checksum();
+
+
+    *pokemon
+
 }
 
 pub fn species_list() -> Vec<String> {

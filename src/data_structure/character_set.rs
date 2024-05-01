@@ -181,3 +181,7 @@ pub fn get_char(index: usize) -> &'static str {
 
     char_set[index]
 }
+
+pub fn get_code(s: &str) -> u8 {
+    get_char_set().iter().position(|&c| c == s).unwrap() as u8
+}
