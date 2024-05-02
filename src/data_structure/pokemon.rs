@@ -271,7 +271,7 @@ impl Pokemon {
         pokemon
     }
 
-    pub fn ofsset(&self) -> usize {
+    pub fn offset(&self) -> usize {
         self.offset
     }
 
@@ -286,12 +286,7 @@ impl Pokemon {
     pub fn is_bad_egg(&self) -> bool {
         let flag = self.misc_flags[0] & 0b00000001;
 
-        if flag == 1 {
-            true
-        } else {
-            false
-        }
-
+        flag == 1
     }
 
     fn set_misc_flags(&mut self, flags: u8) {
@@ -352,7 +347,7 @@ impl Pokemon {
         }
     }
 
-    fn set_species(&mut self, species: &str) {
+    pub fn set_species(&mut self, species: &str) {
         let mut id = POKEDEX_JSON.iter().find(|p| p["name"]["english"] == species).unwrap()["id"].as_u64().unwrap() as u16;
 
         if id == 0 {
@@ -372,6 +367,7 @@ impl Pokemon {
             return 0;
         }
         if species >= 277 {
+            println!("{species}");
             return (SPECIES.iter().position(|&x| x == species).unwrap() + 251)
                 .try_into()
                 .unwrap();
@@ -1424,25 +1420,39 @@ fn recalc_iv(new_iv: u16) -> u16 {
 }
 
 pub fn gen_pokemon_from_species(pokemon: &mut Pokemon, species: &str, ot_name: &[u8], ot_id: &[u8]) -> Pokemon {
+    let dummy = [
+        101, 231, 167, 198, 154, 166, 220, 6, 206, 201, 204, 189, 194, 195, 189, 255, 1, 0, 2, 2,
+        195, 213, 226, 255, 255, 255, 255, 0, 49, 30, 0, 0, 255, 65, 123, 193, 255, 65, 123, 192,
+        255, 65, 123, 192, 231, 64, 123, 192, 103, 65, 123, 192, 255, 7, 123, 192, 255, 81, 254,
+        225, 69, 32, 147, 217, 255, 65, 123, 192, 245, 65, 86, 192, 255, 65, 123, 192, 220, 105,
+        123, 192, 0, 0, 0, 0, 5, 255, 20, 0, 20, 0, 11, 0, 10, 0, 9, 0, 14, 0, 10, 0,
+    ];
     let mut rng = rand::thread_rng();
-    let p: u32 = rng.gen();
+    let p1: u16 = rng.gen();
+    let p2: u16 = rng.gen();
+    let mut p_array = vec![];
 
-    pokemon.set_personality_value(p);
+    p_array.extend_from_slice(&p2.to_le_bytes());
+    p_array.extend_from_slice(&p1.to_le_bytes());
 
-    pokemon.set_species(species);
-    pokemon.set_level(pokemon.lowest_level());
-    pokemon.set_pokeball_caught(4);
-    pokemon.set_ot_id(ot_id);
-    pokemon.set_ot_name(ot_name);
-    pokemon.set_nickname(&species.to_uppercase());
+    let p: u32 = LittleEndian::read_u32(&p_array);
 
-    pokemon.init_stats();
-    pokemon.set_misc_flags(0);
+    let mut new_pokemon = Pokemon::new(pokemon.offset(), &dummy);
 
-    pokemon.update_checksum();
+    new_pokemon.set_personality_value(p);
 
+    new_pokemon.set_species(species);
+    //new_pokemon.set_level(new_pokemon.lowest_level());
+    new_pokemon.set_pokeball_caught(4);
+    new_pokemon.set_ot_id(ot_id);
+    new_pokemon.set_ot_name(ot_name);
+    new_pokemon.set_nickname(&species.to_uppercase());
 
-    *pokemon
+    new_pokemon.init_stats();
+
+    new_pokemon.update_checksum();
+
+    new_pokemon
 
 }
 

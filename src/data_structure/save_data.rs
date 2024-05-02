@@ -64,7 +64,6 @@ use std::convert::From;
 use std::default::Default;
 use thiserror::Error;
 
-use crate::data_structure::character_set::get_char;
 use crate::data_structure::pokemon::Pokemon;
 
 //const SIGNATURE_MAGIC_NUMBER: usize = 0x08012025;
@@ -129,11 +128,7 @@ impl SaveFile {
     }
 
     pub fn is_empty(&self) -> bool {
-        if self.data.len() == 0 {
-            true
-        } else {
-            false
-        }
+        self.data.len() == 0
     }
 
     pub fn ot_name(&self) -> Vec<u8> {
@@ -185,7 +180,7 @@ impl SaveFile {
     pub fn save_pokemon(&mut self, storage: StorageType, pokemon: Pokemon) {
         match storage {
             StorageType::Party => {
-                let offset = pokemon.ofsset();
+                let offset = pokemon.offset();
 
                 self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data());
                 let section = self.get_section(SectionID::TeamItems).unwrap();
@@ -356,7 +351,7 @@ impl PCBuffer {
     }
 
     fn save_pokemon(&mut self, pokemon: Pokemon, buffer: &mut [u8]) {
-        let offset = pokemon.ofsset();
+        let offset = pokemon.offset();
 
         self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data());
 
