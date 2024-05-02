@@ -353,7 +353,7 @@ impl Pokemon {
         if id == 0 {
             id = 412;
         } else if id >= 252 {
-            id = SPECIES[id as usize- 251];
+            id = SPECIES[(id as usize).saturating_add(251)];
         }
 
         let offset = self.pokemon_data.growth_offset;
@@ -368,7 +368,7 @@ impl Pokemon {
         }
         if species >= 277 {
             println!("{species}");
-            return (SPECIES.iter().position(|&x| x == species).unwrap() + 251)
+            return (SPECIES.iter().position(|&x| x == species).unwrap().saturating_add(251))
                 .try_into()
                 .unwrap();
         }
