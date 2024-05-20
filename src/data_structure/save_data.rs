@@ -65,6 +65,7 @@ use std::default::Default;
 use thiserror::Error;
 
 use crate::data_structure::pokemon::Pokemon;
+use crate::misc::ITEMS_G3;
 
 //const SIGNATURE_MAGIC_NUMBER: usize = 0x08012025;
 const NUMBER_GAME_SAVE_SECTIONS: usize = 14;
@@ -193,6 +194,396 @@ impl SaveFile {
         }
     }
 
+    /// For Ruby and Sapphire, this value will be 0x00000000.
+    /// For FireRed and LeafGreen, this value will be 0x00000001.
+    /// For Emerald any value other than 0 or 1 can be used.
+    pub fn game_code(&self) -> u32 {
+        let section = self.get_section(SectionID::TrainerInfo).unwrap();
+        let section_data_buffer = section.data(&self.data);
+        LittleEndian::read_u32(&section_data_buffer[0x00AC..0x00AC + 4])
+    }
+
+    /// The security_key location may vary depending on the game.
+    /// --------------------------------------
+    /// | Offset | Size | Game |
+    /// |   N/A  |  N/A |  RS  |
+    /// | 0x00AC |   4  |  RS  |
+    /// | 0x0AF8 |   4  | FrLg |
+    /// --------------------------------------
+    /// Ruby and Sapphire either do not utilize this masking operation, or the mask is always zero.
+    fn security_key(&self) -> u32 {
+        let game_code = self.game_code();
+
+        if game_code == 0x00000000 {
+            0x00000000
+        } else if game_code == 0x00000001 {
+            let section = self.get_section(SectionID::TrainerInfo).unwrap();
+            let section_data_buffer = section.data(&self.data);
+            LittleEndian::read_u32(&section_data_buffer[0x0AF8..0x0AF8 + 4])
+        } else {
+            game_code
+        }
+    }
+
+    fn security_key_lower(&self) -> u16 {
+        LittleEndian::read_u16(&self.security_key().to_le_bytes()[..2])
+    }
+
+    pub fn item_pocket(&self) -> Vec<(String, u16)> {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer = section.data(&self.data);
+        let mut bag: Vec<u8>;
+
+        // For Ruby and Sapphire, this value will be 0x00000000.
+        // For FireRed and LeafGreen, this value will be 0x00000001.
+        // For Emerald any value other than 0 or 1 can be used.
+        if game_code == 0x00000000 {
+            bag = section_data_buffer[0x0560..0x05B0].to_vec();
+        } else if game_code == 0x00000001 {
+            bag = section_data_buffer[0x0310..0x03B8].to_vec();
+        } else {
+            bag = section_data_buffer[0x0560..0x05D8].to_vec();
+        }
+
+        let bag: Vec<(String, u16)> = bag
+            .chunks_mut(4)
+            .map(|item_entry| {
+                let id = LittleEndian::read_u16(&item_entry[..2]);
+                let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
+                let item = ITEMS_G3[id as usize]
+                    .get(1)
+                    .unwrap()
+                    .to_string()
+                    .replace('*', "");
+
+                (item, quantity)
+            })
+            .collect();
+
+        bag
+    }
+
+    pub fn save_item_pocket(&mut self, pocket: Vec<(String, u16)>) {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
+        let mut bag: Vec<u8> = vec![];
+
+        for (item, quantity) in pocket.iter() {
+            let id = ITEMS_G3
+                .iter()
+                .find(|i| i.get(1).unwrap() == item)
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .parse::<u16>()
+                .unwrap();
+            let new_quantity = quantity ^ security_key;
+
+            bag.extend(id.to_le_bytes());
+            bag.extend(new_quantity.to_le_bytes());
+        }
+
+        if game_code == 0x00000000 {
+            section_data_buffer[0x0560..0x05B0].copy_from_slice(&bag);
+        } else if game_code == 0x00000001 {
+            section_data_buffer[0x0310..0x03B8].copy_from_slice(&bag);
+        } else {
+            section_data_buffer[0x0560..0x05D8].copy_from_slice(&bag);
+        }
+
+        section.write_checksum(&mut self.data);
+    }
+
+    pub fn ball_pocket(&self) -> Vec<(String, u16)> {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer = section.data(&self.data);
+        let mut bag: Vec<u8>;
+
+        // For Ruby and Sapphire, this value will be 0x00000000.
+        // For FireRed and LeafGreen, this value will be 0x00000001.
+        // For Emerald any value other than 0 or 1 can be used.
+        if game_code == 0x00000000 {
+            bag = section_data_buffer[0x0600..0x0640].to_vec();
+        } else if game_code == 0x00000001 {
+            bag = section_data_buffer[0x0430..0x0464].to_vec();
+        } else {
+            bag = section_data_buffer[0x0650..0x0690].to_vec();
+        }
+
+        let bag: Vec<(String, u16)> = bag
+            .chunks_mut(4)
+            .map(|item_entry| {
+                let id = LittleEndian::read_u16(&item_entry[..2]);
+                let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
+                let item = ITEMS_G3[id as usize]
+                    .get(1)
+                    .unwrap()
+                    .to_string()
+                    .replace('*', "");
+
+                (item, quantity)
+            })
+            .collect();
+
+        bag
+    }
+
+    pub fn save_ball_pocket(&mut self, pocket: Vec<(String, u16)>) {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
+        let mut bag: Vec<u8> = vec![];
+
+        for (item, quantity) in pocket.iter() {
+            let id = ITEMS_G3
+                .iter()
+                .find(|i| i.get(1).unwrap() == item)
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .parse::<u16>()
+                .unwrap();
+            let new_quantity = quantity ^ security_key;
+
+            bag.extend(id.to_le_bytes());
+            bag.extend(new_quantity.to_le_bytes());
+        }
+
+        if game_code == 0x00000000 {
+            section_data_buffer[0x0600..0x0640].copy_from_slice(&bag);
+        } else if game_code == 0x00000001 {
+            section_data_buffer[0x0430..0x0464].copy_from_slice(&bag);
+        } else {
+            section_data_buffer[0x0650..0x0690].copy_from_slice(&bag);
+        }
+
+        section.write_checksum(&mut self.data);
+    }
+
+    pub fn berry_pocket(&self) -> Vec<(String, u16)> {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer = section.data(&self.data);
+        let mut bag: Vec<u8>;
+
+        // For Ruby and Sapphire, this value will be 0x00000000.
+        // For FireRed and LeafGreen, this value will be 0x00000001.
+        // For Emerald any value other than 0 or 1 can be used.
+        if game_code == 0x00000000 {
+            bag = section_data_buffer[0x0740..0x7F8].to_vec();
+        } else if game_code == 0x00000001 {
+            bag = section_data_buffer[0x054C..0x5F8].to_vec();
+        } else {
+            bag = section_data_buffer[0x0790..0x848].to_vec();
+        }
+
+        let bag: Vec<(String, u16)> = bag
+            .chunks_mut(4)
+            .map(|item_entry| {
+                let id = LittleEndian::read_u16(&item_entry[..2]);
+                let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
+                let item = ITEMS_G3[id as usize]
+                    .get(1)
+                    .unwrap()
+                    .to_string()
+                    .replace('*', "");
+
+                (item, quantity)
+            })
+            .collect();
+
+        bag
+    }
+
+    pub fn save_berry_pocket(&mut self, pocket: Vec<(String, u16)>) {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
+        let mut bag: Vec<u8> = vec![];
+
+        for (item, quantity) in pocket.iter() {
+            let id = ITEMS_G3
+                .iter()
+                .find(|i| i.get(1).unwrap() == item)
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .parse::<u16>()
+                .unwrap();
+            let new_quantity = quantity ^ security_key;
+
+            bag.extend(id.to_le_bytes());
+            bag.extend(new_quantity.to_le_bytes());
+        }
+
+        if game_code == 0x00000000 {
+            section_data_buffer[0x0740..0x7F8].copy_from_slice(&bag);
+        } else if game_code == 0x00000001 {
+            section_data_buffer[0x054C..0x5F8].copy_from_slice(&bag);
+        } else {
+            section_data_buffer[0x0790..0x848].copy_from_slice(&bag);
+        }
+
+        section.write_checksum(&mut self.data);
+    }
+
+    pub fn tm_pocket(&self) -> Vec<(String, u16)> {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer = section.data(&self.data);
+        let mut bag: Vec<u8>;
+
+        // For Ruby and Sapphire, this value will be 0x00000000.
+        // For FireRed and LeafGreen, this value will be 0x00000001.
+        // For Emerald any value other than 0 or 1 can be used.
+        if game_code == 0x00000000 {
+            bag = section_data_buffer[0x0640..0x0740].to_vec();
+        } else if game_code == 0x00000001 {
+            bag = section_data_buffer[0x0464..0x054C].to_vec();
+        } else {
+            bag = section_data_buffer[0x0690..0x0790].to_vec();
+        }
+
+        let bag: Vec<(String, u16)> = bag
+            .chunks_mut(4)
+            .map(|item_entry| {
+                let id = LittleEndian::read_u16(&item_entry[..2]);
+                let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
+                let item = ITEMS_G3[id as usize]
+                    .get(1)
+                    .unwrap()
+                    .to_string()
+                    .replace('*', "");
+
+                (item, quantity)
+            })
+            .collect();
+
+        bag
+    }
+
+    pub fn save_tm_pocket(&mut self, pocket: Vec<(String, u16)>) {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
+        let mut bag: Vec<u8> = vec![];
+
+        for (item, quantity) in pocket.iter() {
+            let id = ITEMS_G3
+                .iter()
+                .find(|i| i.get(1).unwrap() == item)
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .parse::<u16>()
+                .unwrap();
+            let new_quantity = quantity ^ security_key;
+
+            bag.extend(id.to_le_bytes());
+            bag.extend(new_quantity.to_le_bytes());
+        }
+
+        if game_code == 0x00000000 {
+            section_data_buffer[0x0640..0x0740].copy_from_slice(&bag);
+        } else if game_code == 0x00000001 {
+            section_data_buffer[0x0464..0x054C].copy_from_slice(&bag);
+        } else {
+            section_data_buffer[0x0690..0x0790].copy_from_slice(&bag);
+        }
+
+        section.write_checksum(&mut self.data);
+    }
+
+    pub fn key_pocket(&self) -> Vec<(String, u16)> {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer = section.data(&self.data);
+        let mut bag: Vec<u8>;
+
+        // For Ruby and Sapphire, this value will be 0x00000000.
+        // For FireRed and LeafGreen, this value will be 0x00000001.
+        // For Emerald any value other than 0 or 1 can be used.
+        if game_code == 0x00000000 {
+            bag = section_data_buffer[0x05B0..0x0600].to_vec();
+        } else if game_code == 0x00000001 {
+            bag = section_data_buffer[0x03B8..0x0430].to_vec();
+        } else {
+            bag = section_data_buffer[0x05D8..0x0650].to_vec();
+        }
+
+        let bag: Vec<(String, u16)> = bag
+            .chunks_mut(4)
+            .map(|item_entry| {
+                let id = LittleEndian::read_u16(&item_entry[..2]);
+                let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
+                let item = ITEMS_G3[id as usize]
+                    .get(1)
+                    .unwrap()
+                    .to_string()
+                    .replace('*', "");
+
+                (item, quantity)
+            })
+            .collect();
+
+        bag
+    }
+
+    pub fn save_key_pocket(&mut self, pocket: Vec<(String, u16)>) {
+        let game_code = self.game_code();
+        let security_key = self.security_key_lower();
+
+        let section = self.get_section(SectionID::TeamItems).unwrap();
+        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
+        let mut bag: Vec<u8> = vec![];
+
+        for (item, quantity) in pocket.iter() {
+            let id = ITEMS_G3
+                .iter()
+                .find(|i| i.get(1).unwrap() == item)
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .parse::<u16>()
+                .unwrap();
+            let new_quantity = quantity ^ security_key;
+
+            bag.extend(id.to_le_bytes());
+            bag.extend(new_quantity.to_le_bytes());
+        }
+
+        if game_code == 0x00000000 {
+            section_data_buffer[0x05B0..0x0600].copy_from_slice(&bag);
+        } else if game_code == 0x00000001 {
+            section_data_buffer[0x03B8..0x0430].copy_from_slice(&bag);
+        } else {
+            section_data_buffer[0x05D8..0x0650].copy_from_slice(&bag);
+        }
+
+        section.write_checksum(&mut self.data);
+    }
+
     pub fn raw_data(&self) -> Vec<u8> {
         self.data.to_vec()
     }
@@ -276,6 +667,11 @@ impl Section {
     fn data<'a>(&'a self, buffer: &'a [u8]) -> &'a [u8] {
         let section_buffer = &buffer[self.offset..self.offset + self.size];
         &section_buffer[0..SECTION_DATA_SIZE]
+    }
+
+    fn data_mut<'a>(&'a self, buffer: &'a mut [u8]) -> &'a mut [u8] {
+        let section_buffer = &mut buffer[self.offset..self.offset + self.size];
+        &mut section_buffer[0..SECTION_DATA_SIZE]
     }
 
     fn offset(&self) -> usize {
@@ -370,12 +766,6 @@ impl PCBuffer {
 
     fn is_empty(&self) -> bool {
         self.data.is_empty()
-    }
-
-    fn write_checksum(&self, buffer: &mut [u8]) {
-        for section in self.buffer {
-            section.write_checksum(buffer);
-        }
     }
 }
 

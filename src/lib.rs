@@ -27,6 +27,7 @@
 //! ```
 //!
 pub mod data_structure;
+pub mod misc;
 #[doc(hidden)]
 pub mod test;
 
