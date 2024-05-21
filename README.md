@@ -10,3 +10,8 @@ Pokémon Generation III save file editor.
 Provides utilities to read, modify, and write save files from Pokémon games such as Ruby, Sapphire, Emerald, FireRed, and LeafGreen.
 
 This is the backend for the save file editor [pk_editor](https://github.com/CMIW/pk_editor).
+
+For the documentation you need cargo installed, copy the repo and the run
+```
+cargo doc --open
+```
