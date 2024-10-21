@@ -22,6 +22,17 @@
 //!
 //!     let box1 = save_file.pc_box(0);
 //!
+//!     let item_bag = save_file.item_pocket();
+//!
+//!     let ball_bag = save_file.ball_pocket();
+//!
+//!     let berry_bag = save_file.berry_pocket();
+//!
+//!     let tm_bag = save_file.tm_pocket();
+//!
+//!     let key_bag = save_file.key_pocket();
+//!
+//!
 //!     Ok(())
 //! }
 //! ```

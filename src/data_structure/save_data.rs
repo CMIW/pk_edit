@@ -1,6 +1,6 @@
 //! Implementation of [Pokemon Gen (III) Save file data structure](https://bulbapedia.bulbagarden.net/wiki/Save_data_structure_(Generation_III)).
 //!
-//! The structure consists of 128 KB of data, though not every byte is used. When emulated, this data is generally placed in a separate file (".sav" is a common extension). The integrity of most of the file is validated by checksums.
+//! The structure consists of 128 KB of data, though not every byte is used. The integrity of most of the file is validated by checksums.
 //!
 //! # File structure
 //!
@@ -65,7 +65,7 @@ use std::default::Default;
 use thiserror::Error;
 
 use crate::data_structure::pokemon::Pokemon;
-use crate::misc::ITEMS_G3;
+use crate::misc::{find_item, item_id_g3};
 
 //const SIGNATURE_MAGIC_NUMBER: usize = 0x08012025;
 const NUMBER_GAME_SAVE_SECTIONS: usize = 14;
@@ -101,7 +101,7 @@ impl SaveFile {
         let mut game_save_b: [Section; NUMBER_GAME_SAVE_SECTIONS] =
             [Section::default(); NUMBER_GAME_SAVE_SECTIONS];
 
-        // Read each game save block, the two sets ot 14 game save sections
+        // Read each game save block, the two sets of 14 game save sections
         for i in 0..NUMBER_GAME_SAVE_SECTIONS {
             let save_a_offset = GAME_SAVE_A_OFFSET + (i * SECTION_SIZE);
             let save_b_offset = GAME_SAVE_B_OFFSET + (i * SECTION_SIZE);
@@ -253,11 +253,10 @@ impl SaveFile {
             .map(|item_entry| {
                 let id = LittleEndian::read_u16(&item_entry[..2]);
                 let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
-                let item = ITEMS_G3[id as usize]
-                    .get(1)
-                    .unwrap()
-                    .to_string()
-                    .replace('*', "");
+                let item = match find_item(id as usize) {
+                    Ok(i) => i,
+                    Err(_) => String::from("Nothing"),
+                };
 
                 (item, quantity)
             })
@@ -275,14 +274,7 @@ impl SaveFile {
         let mut bag: Vec<u8> = vec![];
 
         for (item, quantity) in pocket.iter() {
-            let id = ITEMS_G3
-                .iter()
-                .find(|i| i.get(1).unwrap() == item)
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .parse::<u16>()
-                .unwrap();
+            let id = item_id_g3(item).unwrap_or(0);
             let new_quantity = quantity ^ security_key;
 
             bag.extend(id.to_le_bytes());
@@ -324,11 +316,10 @@ impl SaveFile {
             .map(|item_entry| {
                 let id = LittleEndian::read_u16(&item_entry[..2]);
                 let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
-                let item = ITEMS_G3[id as usize]
-                    .get(1)
-                    .unwrap()
-                    .to_string()
-                    .replace('*', "");
+                let item = match find_item(id as usize) {
+                    Ok(i) => i,
+                    Err(_) => String::from("Nothing"),
+                };
 
                 (item, quantity)
             })
@@ -346,14 +337,7 @@ impl SaveFile {
         let mut bag: Vec<u8> = vec![];
 
         for (item, quantity) in pocket.iter() {
-            let id = ITEMS_G3
-                .iter()
-                .find(|i| i.get(1).unwrap() == item)
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .parse::<u16>()
-                .unwrap();
+            let id = item_id_g3(item).unwrap_or(0);
             let new_quantity = quantity ^ security_key;
 
             bag.extend(id.to_le_bytes());
@@ -395,11 +379,10 @@ impl SaveFile {
             .map(|item_entry| {
                 let id = LittleEndian::read_u16(&item_entry[..2]);
                 let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
-                let item = ITEMS_G3[id as usize]
-                    .get(1)
-                    .unwrap()
-                    .to_string()
-                    .replace('*', "");
+                let item = match find_item(id as usize) {
+                    Ok(i) => i,
+                    Err(_) => String::from("Nothing"),
+                };
 
                 (item, quantity)
             })
@@ -417,14 +400,7 @@ impl SaveFile {
         let mut bag: Vec<u8> = vec![];
 
         for (item, quantity) in pocket.iter() {
-            let id = ITEMS_G3
-                .iter()
-                .find(|i| i.get(1).unwrap() == item)
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .parse::<u16>()
-                .unwrap();
+            let id = item_id_g3(item).unwrap_or(0);
             let new_quantity = quantity ^ security_key;
 
             bag.extend(id.to_le_bytes());
@@ -466,11 +442,10 @@ impl SaveFile {
             .map(|item_entry| {
                 let id = LittleEndian::read_u16(&item_entry[..2]);
                 let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
-                let item = ITEMS_G3[id as usize]
-                    .get(1)
-                    .unwrap()
-                    .to_string()
-                    .replace('*', "");
+                let item = match find_item(id as usize) {
+                    Ok(i) => i,
+                    Err(_) => String::from("Nothing"),
+                };
 
                 (item, quantity)
             })
@@ -488,14 +463,7 @@ impl SaveFile {
         let mut bag: Vec<u8> = vec![];
 
         for (item, quantity) in pocket.iter() {
-            let id = ITEMS_G3
-                .iter()
-                .find(|i| i.get(1).unwrap() == item)
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .parse::<u16>()
-                .unwrap();
+            let id = item_id_g3(item).unwrap_or(0);
             let new_quantity = quantity ^ security_key;
 
             bag.extend(id.to_le_bytes());
@@ -537,11 +505,10 @@ impl SaveFile {
             .map(|item_entry| {
                 let id = LittleEndian::read_u16(&item_entry[..2]);
                 let quantity = LittleEndian::read_u16(&item_entry[2..]) ^ security_key;
-                let item = ITEMS_G3[id as usize]
-                    .get(1)
-                    .unwrap()
-                    .to_string()
-                    .replace('*', "");
+                let item = match find_item(id as usize) {
+                    Ok(i) => i,
+                    Err(_) => String::from("Nothing"),
+                };
 
                 (item, quantity)
             })
@@ -559,14 +526,7 @@ impl SaveFile {
         let mut bag: Vec<u8> = vec![];
 
         for (item, quantity) in pocket.iter() {
-            let id = ITEMS_G3
-                .iter()
-                .find(|i| i.get(1).unwrap() == item)
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .parse::<u16>()
-                .unwrap();
+            let id = item_id_g3(item).unwrap_or(0);
             let new_quantity = quantity ^ security_key;
 
             bag.extend(id.to_le_bytes());
