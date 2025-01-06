@@ -1,16 +1,68 @@
 //! Implementation of [Pokémon data structure Gen (III)](https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_data_structure_(Generation_III)).
 //!
+//! Pokemon data handling module
+//!
+//! This module manages the save file sections and structures for handling Pokémon data in Gen III games.
+//! It includes tools for accessing, decrypting, and managing the PC buffer, trainer data, and more.
+//!
+//! # Example Usage
+//! ## Modifying a Pokémon's Attributes
+//! ```rust
+//! use std::fs::File;
+//! use std::io::BufReader;
+//! use pk_edit::SaveFile;
+//! use pk_edit::StorageType;
+//! use std::io::Read;
+//!
+//! let mut buffer = Vec::new();
+//! let file = File::open("~/Pokemon - Emerald Version/Pokemon - Emerald Version (U).sav")?;
+//! let mut buf_reader = BufReader::new(file);
+//! buf_reader.read_to_end(&mut buffer)?;
+//!
+//! let save_file: SaveFile = SaveFile::new(&buffer);
+//! let mut pokemon = save_file.pc_box(0)[0];
+//!
+//! pokemon.set_friendship(100);
+//! pokemon.set_level(50);
+//! save_file.save_pokemon(StorageType::PC, pokemon)?;
+//! ```
+//! ## Viewing Pokémon Data
+//! ```rust
+//! let mut buffer = Vec::new();
+//! let file = File::open("~/Pokemon - Emerald Version/Pokemon - Emerald Version (U).sav")?;
+//! let mut buf_reader = BufReader::new(file);
+//! buf_reader.read_to_end(&mut buffer)?;
+//!
+//! let save_file: SaveFile = SaveFile::new(&buffer);
+//! let pokemon = save_file.pc_box(0)[0];
+//! println!("Level: {}, Friendship: {}", pokemon.level(), pokemon.friendship());
+//! ```
 use byteorder::{ByteOrder, LittleEndian};
 use rand::Rng;
 use serde_json::Value;
 use std::fmt;
+use thiserror::Error;
 
-use crate::data_structure::character_set::{get_char, get_code};
+use crate::data_structure::character_set::{get_char, get_code, CharacterSet};
 use crate::data_structure::save_data::TrainerID;
 use crate::misc::{
-    find_item, growth_rate, item_id_g3, nat_dex_num, pk_species, hidden_ability, ability, gender_ratio, typing, move_data, EXPERIENCE_TABLE,
-    GENDER_THRESHOLD, MOVES, NATURE, NATURE_MODIFIER, POKEDEX_JSON, SPECIES,
+    ability, find_item, gender_ratio, growth_rate, hidden_ability, item_id_g3, move_data,
+    nat_dex_num, pk_species, typing, EXPERIENCE_TABLE, GENDER_THRESHOLD, MOVES, NATURE,
+    NATURE_MODIFIER, POKEDEX_JSON, SPECIES,
 };
+
+/// Errors related to Pokémon data handling.
+#[derive(Error, Debug)]
+pub enum PokemonError {
+    #[error("Invalid data length: expected 48 bytes, found {0}")]
+    InvalidDataLength(usize),
+
+    #[error("Species '{0}' not recognized")]
+    UnknownSpecies(String),
+
+    #[error("Gender ratio data missing for dex number {0}")]
+    MissingGenderRatio(u16),
+}
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct Pokemon {
@@ -26,6 +78,25 @@ pub struct Pokemon {
     _padding: [u8; 2],
     pokemon_data: PokemonData,
     stats: Stats,
+}
+
+impl fmt::Display for Pokemon {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "OT: {}\n\
+            Level: {}\n\
+            PID: {}\n\
+            Species: {}\n\
+            Nickname: {}\n\
+            ",
+            self.ot_name(),
+            self.level(),
+            self.personality_value(),
+            self.species(),
+            self.nickname(),
+        )
+    }
 }
 
 impl Pokemon {
@@ -106,6 +177,7 @@ impl Pokemon {
     }
 
     pub fn nickname(&self) -> String {
+        //let char_set = CharacterSet::new();
         let nickname = &self
             .nickname
             .iter()
@@ -144,7 +216,7 @@ impl Pokemon {
     }
 
     fn set_ot_name(&mut self, ot_name: &[u8]) {
-        self.ot_name.copy_from_slice(ot_name);
+        self.ot_name[..ot_name.len()].copy_from_slice(ot_name);
     }
 
     pub fn checksum(&self) -> u16 {
@@ -164,8 +236,16 @@ impl Pokemon {
         }
     }
 
-    pub fn set_species(&mut self, species: &str) {
-        let mut id = nat_dex_num(species).unwrap_or(0);
+    pub fn set_species(&mut self, species: &str) -> Result<(), PokemonError> {
+
+        if self.species().to_uppercase() == self.nickname() {
+            self.set_nickname(&species.to_uppercase());
+        }
+
+        let mut id = match nat_dex_num(species) {
+            Ok(id) => id,
+            Err(e) => return Err(PokemonError::UnknownSpecies(species.to_string())),
+        };
 
         if id == 0 {
             id = 412;
@@ -175,6 +255,8 @@ impl Pokemon {
 
         let offset = self.pokemon_data.growth_offset;
         self.pokemon_data.data[offset..offset + 2].copy_from_slice(&id.to_le_bytes());
+
+        Ok(())
     }
 
     pub fn nat_dex_number(&self) -> u16 {
@@ -240,14 +322,14 @@ impl Pokemon {
 
     pub fn set_level(&mut self, level: u8) {
         let index = self.nat_dex_number();
-
+        println!("nat_dex_number: {:?}", &index);
         let growth = match growth_rate(index) {
             Ok(growth) => growth,
             Err(_) => String::from(""),
         };
 
         let growth_index = growth_index(&growth);
-
+        println!("level: {:?}, growth_index: {:?}", &level, &growth_index);
         let experience = EXPERIENCE_TABLE[(level - 1) as usize][growth_index];
 
         let offset = self.pokemon_data.growth_offset;
@@ -272,17 +354,13 @@ impl Pokemon {
         let ability_index = self.ability_index();
 
         match ability_index {
-            0 => {
-                match ability(index) {
-                    Ok(ability) => ability,
-                    Err(_) => String::from(""),
-                }
+            0 => match ability(index) {
+                Ok(ability) => ability,
+                Err(_) => String::from(""),
             },
-            1 => {
-                match hidden_ability(index) {
-                    Ok(ability) => ability,
-                    Err(_) => String::from(""),
-                }
+            1 => match hidden_ability(index) {
+                Ok(ability) => ability,
+                Err(_) => String::from(""),
             },
             _ => String::from(""),
         }
@@ -324,39 +402,19 @@ impl Pokemon {
         };
 
         if let Some(p_move) = move1 {
-            moves.push((
-                p_move.0,
-                p_move.1,
-                pp1[0],
-                p_move.2,
-            ));
+            moves.push((p_move.0, p_move.1, pp1[0], p_move.2));
         }
 
         if let Some(p_move) = move2 {
-            moves.push((
-                p_move.0,
-                p_move.1,
-                pp2[0],
-                p_move.2,
-            ));
+            moves.push((p_move.0, p_move.1, pp2[0], p_move.2));
         }
 
         if let Some(p_move) = move3 {
-            moves.push((
-                p_move.0,
-                p_move.1,
-                pp3[0],
-                p_move.2,
-            ));
+            moves.push((p_move.0, p_move.1, pp3[0], p_move.2));
         }
 
         if let Some(p_move) = move4 {
-            moves.push((
-                p_move.0,
-                p_move.1,
-                pp4[0],
-                p_move.2,
-            ));
+            moves.push((p_move.0, p_move.1, pp4[0], p_move.2));
         }
 
         moves
@@ -542,7 +600,10 @@ impl Pokemon {
 
     pub fn friendship(&self) -> u8 {
         let offset = self.pokemon_data.growth_offset;
-        self.pokemon_data.data.get(offset + 9..offset + 10).unwrap_or_default()[0]
+        self.pokemon_data
+            .data
+            .get(offset + 9..offset + 10)
+            .unwrap_or_default()[0]
     }
 
     pub fn set_friendship(&mut self, value: u8) {
@@ -1211,7 +1272,7 @@ fn recalc_iv(new_iv: u16) -> u16 {
 
 // generating PIDs is buggy, still don't understand why or how
 pub fn gen_pokemon_from_species(
-    pokemon: &mut Pokemon,
+    pokemon_offset: usize,
     species: &str,
     ot_name: &[u8],
     ot_id: &[u8],
@@ -1232,10 +1293,10 @@ pub fn gen_pokemon_from_species(
 
     let p: u32 = gen_p(&mut seed);
 
-    let mut new_pokemon = Pokemon::new(pokemon.offset(), &dummy);
+    let mut new_pokemon = Pokemon::new(pokemon_offset, &dummy);
 
     new_pokemon.set_personality_value(p);
-    //new_pokemon.set_personality_value(587584645);
+    new_pokemon.set_personality_value(587584645);
 
     new_pokemon.set_species(species);
     new_pokemon.set_level(new_pokemon.lowest_level());
@@ -1267,11 +1328,11 @@ fn rng(state: &mut u32) -> u32 {
 
 // generating PIDs is buggy, still don't understand why or how
 fn gen_p(seed: &mut u32) -> u32 {
-    //let mut rng = rand::thread_rng();
+    let mut t_rng = rand::thread_rng();
     // for some still unknown reason, the program has a strange behaviour que using some ranbom number to generate a PID
-    //let mut seed: u32 = rng.gen();
-    let p_h: u32 = rng(seed);
-    let p_l: u32 = rng(seed);
+    let mut seed: u32 = t_rng.gen();
+    let p_h: u32 = rng(&mut seed);
+    let p_l: u32 = rng(&mut seed);
 
     p_l | (p_h << 16)
 }

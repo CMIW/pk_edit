@@ -421,7 +421,7 @@ pub fn move_data(id: usize) -> Result<(String, String, u8)> {
     res
 }
 
-pub fn typing(dex_num: u16) -> Result<(String,Option<String>)> {
+pub fn typing(dex_num: u16) -> Result<(String, Option<String>)> {
     let conn = Connection::open("pk_edit.db")?;
 
     let res = conn.query_row(
