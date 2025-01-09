@@ -221,7 +221,7 @@ impl SaveFile {
             StorageType::Party => {
                 let offset = pokemon.offset();
 
-                self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data());
+                self.data[offset..offset + 100].copy_from_slice(&pokemon.raw_data());
                 let section = self
                     .get_section(SectionID::TeamItems)
                     .expect("Expected value but found None");
@@ -767,7 +767,7 @@ impl PCBuffer {
     /// - `buffer`: The save file data buffer to update.
     fn save_pokemon(&mut self, pokemon: Pokemon, buffer: &mut [u8]) -> Result<(), SaveDataError> {
         let offset = pokemon.offset();
-        self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data());
+        self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data()[..80]);
 
         // Update each section of the PC Buffer and recalculate checksums.
         for (i, section) in self.data.chunks(PC_BUFFER_SECTION_SIZE).enumerate() {

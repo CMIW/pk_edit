@@ -46,9 +46,9 @@ use thiserror::Error;
 use crate::data_structure::character_set::{get_char, get_code, CharacterSet};
 use crate::data_structure::save_data::TrainerID;
 use crate::misc::{
-    ability, find_item, gender_ratio, growth_rate, hidden_ability, item_id_g3, move_data,
-    nat_dex_num, pk_species, typing, EXPERIENCE_TABLE, GENDER_THRESHOLD, MOVES, NATURE,
-    NATURE_MODIFIER, POKEDEX_JSON, SPECIES,
+    evolution, base_stats, find_move, ability, find_item, gender_ratio, growth_rate, hidden_ability, item_id_g3, move_data,
+    nat_dex_num, pk_species, typing, EXPERIENCE_TABLE, GENDER_THRESHOLD, /*MOVES,*/ NATURE,
+    NATURE_MODIFIER, /*POKEDEX_JSON,*/ SPECIES,
 };
 
 /// Errors related to Pokémon data handling.
@@ -62,6 +62,30 @@ pub enum PokemonError {
 
     #[error("Gender ratio data missing for dex number {0}")]
     MissingGenderRatio(u16),
+}
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Evolution {
+    prev: Option<[String; 2]>,
+    next: Option<Vec<[String; 2]>>,
+}
+
+impl Evolution {
+    pub fn prev_level(&mut self) -> Option<u8> {
+        if let Some(prev) = &self.prev {
+            let mut level_str = &prev[1].replace("Level ", "");
+            println!("{:?}", &level_str);
+            if let Ok(parsed_level) = level_str.parse::<u8>() {
+                Some(parsed_level)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -256,6 +280,10 @@ impl Pokemon {
         let offset = self.pokemon_data.growth_offset;
         self.pokemon_data.data[offset..offset + 2].copy_from_slice(&id.to_le_bytes());
 
+        if self.lowest_level() > self.level() {
+            self.set_level(self.lowest_level());
+        }
+
         Ok(())
     }
 
@@ -421,14 +449,11 @@ impl Pokemon {
     }
 
     pub fn set_move(&mut self, position: usize, attack: &str) {
-        if let Some(p_move) = MOVES.iter().find(|&m| m["ename"] == attack) {
+        if let Ok((i, pp)) = find_move(attack) {
             let offset = self.pokemon_data.attacks_offset;
 
-            let index = p_move["id"].as_u64().unwrap() as u16;
-            let pp = p_move["pp"].as_u64().unwrap() as u8;
-
             self.pokemon_data.data[offset + (position * 2)..offset + ((position * 2) + 2)]
-                .copy_from_slice(&index.to_le_bytes());
+                .copy_from_slice(&i.to_le_bytes());
 
             self.pokemon_data.data[offset + (position + 8)..offset + (position + 9)]
                 .copy_from_slice(&pp.to_le_bytes());
@@ -555,47 +580,47 @@ impl Pokemon {
     }
 
     fn init_stats(&mut self) {
-        let index = self.nat_dex_number().saturating_sub(1) as usize;
-        let nature_index = self.nature_index();
+        if let Ok(base_stats) = base_stats(&self.nat_dex_number()) {
+            let nature_index = self.nature_index();
 
-        let base_stats = &POKEDEX_JSON[index]["base"];
-        let ev_offset = self.pokemon_data.ev_offset;
+            let ev_offset = self.pokemon_data.ev_offset;
 
-        let iv_offset = self.pokemon_data.miscellaneous_offset;
+            let iv_offset = self.pokemon_data.miscellaneous_offset;
 
-        let ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
+            let ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
 
-        self.stats = Stats {
-            // Base
-            hp: base_stats["HP"].as_u64().unwrap() as u16,
-            attack: base_stats["Attack"].as_u64().unwrap() as u16,
-            defense: base_stats["Defense"].as_u64().unwrap() as u16,
-            sp_attack: base_stats["Sp. Attack"].as_u64().unwrap() as u16,
-            sp_defense: base_stats["Sp. Defense"].as_u64().unwrap() as u16,
-            speed: base_stats["Speed"].as_u64().unwrap() as u16,
-            // Effort Values
-            hp_ev: self.pokemon_data.data[ev_offset..ev_offset + 1][0] as u16,
-            attack_ev: self.pokemon_data.data[ev_offset + 1..ev_offset + 2][0] as u16,
-            defense_ev: self.pokemon_data.data[ev_offset + 2..ev_offset + 3][0] as u16,
-            sp_attack_ev: self.pokemon_data.data[ev_offset + 4..ev_offset + 5][0] as u16,
-            sp_defense_ev: self.pokemon_data.data[ev_offset + 5..ev_offset + 6][0] as u16,
-            speed_ev: self.pokemon_data.data[ev_offset + 3..ev_offset + 4][0] as u16,
-            // Individual Values
-            // HP           0x1F        = 0b00000000000000000000000000011111
-            // Attack       0x3E0       = 0b00000000000000000000001111100000
-            // Defense      0x7C00      = 0b00000000000000000111110000000000
-            // Speed        0xF8000     = 0b00000000000011111000000000000000
-            // Sp Attack    0x1F00000   = 0b00000001111100000000000000000000
-            // Sp Defense   0x3E000000  = 0b00111110000000000000000000000000
-            hp_iv: (ivs & 0x1F) as u16,
-            attack_iv: ((ivs & 0x3E0) >> 5) as u16,
-            defense_iv: ((ivs & 0x7C00) >> 10) as u16,
-            speed_iv: ((ivs & 0xF8000) >> 15) as u16,
-            sp_attack_iv: ((ivs & 0x1F00000) >> 20) as u16,
-            sp_defense_iv: ((ivs & 0x3E000000) >> 25) as u16,
-            // Nature Modifiers
-            n_mod: NATURE_MODIFIER[nature_index],
-        };
+            self.stats = Stats {
+                // Base
+                hp: base_stats.0,
+                attack: base_stats.1,
+                defense: base_stats.2,
+                sp_attack: base_stats.3,
+                sp_defense: base_stats.4,
+                speed: base_stats.5,
+                // Effort Values
+                hp_ev: self.pokemon_data.data[ev_offset..ev_offset + 1][0] as u16,
+                attack_ev: self.pokemon_data.data[ev_offset + 1..ev_offset + 2][0] as u16,
+                defense_ev: self.pokemon_data.data[ev_offset + 2..ev_offset + 3][0] as u16,
+                sp_attack_ev: self.pokemon_data.data[ev_offset + 4..ev_offset + 5][0] as u16,
+                sp_defense_ev: self.pokemon_data.data[ev_offset + 5..ev_offset + 6][0] as u16,
+                speed_ev: self.pokemon_data.data[ev_offset + 3..ev_offset + 4][0] as u16,
+                // Individual Values
+                // HP           0x1F        = 0b00000000000000000000000000011111
+                // Attack       0x3E0       = 0b00000000000000000000001111100000
+                // Defense      0x7C00      = 0b00000000000000000111110000000000
+                // Speed        0xF8000     = 0b00000000000011111000000000000000
+                // Sp Attack    0x1F00000   = 0b00000001111100000000000000000000
+                // Sp Defense   0x3E000000  = 0b00111110000000000000000000000000
+                hp_iv: (ivs & 0x1F) as u16,
+                attack_iv: ((ivs & 0x3E0) >> 5) as u16,
+                defense_iv: ((ivs & 0x7C00) >> 10) as u16,
+                speed_iv: ((ivs & 0xF8000) >> 15) as u16,
+                sp_attack_iv: ((ivs & 0x1F00000) >> 20) as u16,
+                sp_defense_iv: ((ivs & 0x3E000000) >> 25) as u16,
+                // Nature Modifiers
+                n_mod: NATURE_MODIFIER[nature_index],
+            };
+        }
     }
 
     pub fn friendship(&self) -> u8 {
@@ -662,8 +687,8 @@ impl Pokemon {
             .copy_from_slice(&held_item_index.to_le_bytes())
     }
 
-    pub fn raw_data(&self) -> [u8; 80] {
-        let mut raw_data: [u8; 80] = [0; 80];
+    pub fn raw_data(&self) -> [u8; 100] {
+        let mut raw_data: [u8; 100] = [0; 100];
         let mut data: [u8; 48] = [0; 48];
 
         let ecryption_key =
@@ -681,6 +706,16 @@ impl Pokemon {
         raw_data[0x1C..0x1E].copy_from_slice(&self.checksum);
         raw_data[0x1E..0x20].copy_from_slice(&self._padding);
         raw_data[0x20..0x50].copy_from_slice(&data);
+        raw_data[0x50..0x54].copy_from_slice(&0_u32.to_le_bytes());
+        raw_data[0x54..0x55].copy_from_slice(&self.level().to_le_bytes());
+        raw_data[0x55..0x56].copy_from_slice(&255_u8.to_le_bytes());
+        raw_data[0x56..0x58].copy_from_slice(&self.stats().hp(self.level()).to_le_bytes());
+        raw_data[0x58..0x5A].copy_from_slice(&self.stats().hp(self.level()).to_le_bytes());
+        raw_data[0x5A..0x5C].copy_from_slice(&self.stats().attack(self.level()).to_le_bytes());
+        raw_data[0x5C..0x5E].copy_from_slice(&self.stats().defense(self.level()).to_le_bytes());
+        raw_data[0x5E..0x60].copy_from_slice(&self.stats().speed(self.level()).to_le_bytes());
+        raw_data[0x60..0x62].copy_from_slice(&self.stats().sp_attack(self.level()).to_le_bytes());
+        raw_data[0x62..].copy_from_slice(&self.stats().sp_defense(self.level()).to_le_bytes());
 
         raw_data
     }
@@ -694,14 +729,10 @@ impl Pokemon {
     pub fn lowest_level(&self) -> u8 {
         let mut level: u8 = 1;
         if !self.is_empty() {
-            let index = self.nat_dex_number().saturating_sub(1) as usize;
-
-            let prev_evo = &POKEDEX_JSON[index]["evolution"]["prev"];
-
-            if prev_evo != &Value::Null && prev_evo[1].as_str().unwrap().contains("Level") {
-                let mut level_str = prev_evo[1].as_str().unwrap().to_string();
-                level_str.retain(|c| c.is_numeric());
-                level = level_str.parse::<u8>().unwrap();
+            if let Ok(mut evolution) = evolution(&self.nat_dex_number()) {
+                if let Some(prev_level) = evolution.prev_level() {
+                    level = prev_level;
+                }
             }
         }
 

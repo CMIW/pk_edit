@@ -1,9 +1,8 @@
-use csv::Reader;
-use lazy_static::lazy_static;
 use rusqlite::{Connection, Result};
 use serde_json::Value;
 use std::fs::File;
 use std::io::Write;
+use crate::Evolution;
 
 pub const SPECIES: [u16; 136] = [
     412, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294,
@@ -167,7 +166,7 @@ pub const NATURE_MODIFIER: [[f32; 5]; 25] = [
 ];
 
 const DB: &[u8] = include_bytes!("../pk_edit.db");
-const POKEDEX_BYTES: &[u8] = include_bytes!("../pokedex.csv");
+/*const POKEDEX_BYTES: &[u8] = include_bytes!("../pokedex.csv");
 const POKEDEX_JSON_BYTES: &[u8] = include_bytes!("../pokedex.json");
 const MOVES_BYTES: &[u8] = include_bytes!("../moves.json");
 const MOVES_G3_BYTES: &[u8] = include_bytes!("../moves.csv");
@@ -190,7 +189,7 @@ lazy_static! {
         .records()
         .map(|record| record.unwrap())
         .collect();
-}
+}*/
 
 pub fn extract_db() -> std::io::Result<()> {
     let mut f = File::create_new("./pk_edit.db")?;
@@ -317,13 +316,13 @@ pub fn key_items() -> Result<Vec<String>> {
     Ok(res)
 }
 
-pub fn transpose_item(name: &str) -> Option<usize> {
+/*pub fn transpose_item(name: &str) -> Option<usize> {
     let name = match_item_name(name);
 
     let item = ITEMS.iter().find(|&item| item["name"]["english"] == name);
 
     item.map(|item| item["id"].as_u64().unwrap() as usize)
-}
+}*/
 
 pub fn find_item(id_g3: usize) -> Result<String> {
     let conn = Connection::open("pk_edit.db")?;
@@ -527,4 +526,46 @@ pub fn moves() -> Result<Vec<String>> {
     let _ = conn.close();
 
     Ok(res)
+}
+
+pub fn find_move(name: &str) -> Result<(u16, u8)> {
+    let conn = Connection::open("pk_edit.db")?;
+
+    let res = conn.query_row(
+        "SELECT Id, pp FROM Moves WHERE e_name = ?1",
+        [name],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    );
+
+    let _ = conn.close();
+
+    res
+}
+
+pub fn base_stats(dex_num: &u16) -> Result<(u16, u16, u16, u16, u16, u16)> {
+    let conn = Connection::open("pk_edit.db")?;
+
+    let res = conn.query_row(
+        "SELECT hp, attack, defense, sp_attack, sp_defense, speed FROM Pokedex WHERE dex_num = ?1",
+        [dex_num],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+    );
+
+    let _ = conn.close();
+
+    res
+}
+
+pub fn evolution(dex_num: &u16) -> anyhow::Result<Evolution, anyhow::Error> {
+    let conn = Connection::open("pk_edit.db")?;
+
+    let res: String = conn.query_row(
+        "SELECT evolution FROM Pokedex WHERE dex_num = ?1",
+        [dex_num],
+        |row| row.get(0),
+    )?;
+
+    let _ = conn.close();
+
+    Ok(serde_json::from_str::<Evolution>(&res)?)
 }
