@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::data_structure::pokemon::{Pokemon, Pokerus};
+    use crate::data_structure::pokemon::{gen_pokemon_from_species, Pokemon, Pokerus};
 
     const TORCHIK: [u8; 100] = [
         101, 231, 167, 198, 154, 166, 220, 6, 206, 201, 204, 189, 194, 195, 189, 255, 1, 0, 2, 2,
@@ -49,5 +49,19 @@ mod tests {
         let torchik = Pokemon::new(0, &TORCHIK);
 
         assert_eq!(Pokerus::None, torchik.pokerus_status());
+    }
+
+    #[test]
+    fn gen_p() {
+        let mut torchik = Pokemon::new(0, &TORCHIK);
+        let ot_name = torchik.ot_name();
+        let ot_id: Vec<u8> = torchik.ot_id().into();
+        println!("{}", torchik);
+
+        let bulbasour =
+            gen_pokemon_from_species(&mut torchik, "Bulbasaur", &ot_name.as_bytes(), &ot_id);
+        println!("{}", bulbasour);
+
+        assert_eq!(true, true);
     }
 }

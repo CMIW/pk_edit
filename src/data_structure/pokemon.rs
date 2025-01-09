@@ -1,16 +1,92 @@
 //! Implementation of [Pokémon data structure Gen (III)](https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_data_structure_(Generation_III)).
 //!
+//! Pokemon data handling module
+//!
+//! This module manages the save file sections and structures for handling Pokémon data in Gen III games.
+//! It includes tools for accessing, decrypting, and managing the PC buffer, trainer data, and more.
+//!
+//! # Example Usage
+//! ## Modifying a Pokémon's Attributes
+//! ```rust
+//! use std::fs::File;
+//! use std::io::BufReader;
+//! use pk_edit::SaveFile;
+//! use pk_edit::StorageType;
+//! use std::io::Read;
+//!
+//! let mut buffer = Vec::new();
+//! let file = File::open("~/Pokemon - Emerald Version/Pokemon - Emerald Version (U).sav")?;
+//! let mut buf_reader = BufReader::new(file);
+//! buf_reader.read_to_end(&mut buffer)?;
+//!
+//! let save_file: SaveFile = SaveFile::new(&buffer);
+//! let mut pokemon = save_file.pc_box(0)[0];
+//!
+//! pokemon.set_friendship(100);
+//! pokemon.set_level(50);
+//! save_file.save_pokemon(StorageType::PC, pokemon)?;
+//! ```
+//! ## Viewing Pokémon Data
+//! ```rust
+//! let mut buffer = Vec::new();
+//! let file = File::open("~/Pokemon - Emerald Version/Pokemon - Emerald Version (U).sav")?;
+//! let mut buf_reader = BufReader::new(file);
+//! buf_reader.read_to_end(&mut buffer)?;
+//!
+//! let save_file: SaveFile = SaveFile::new(&buffer);
+//! let pokemon = save_file.pc_box(0)[0];
+//! println!("Level: {}, Friendship: {}", pokemon.level(), pokemon.friendship());
+//! ```
 use byteorder::{ByteOrder, LittleEndian};
 use rand::Rng;
 use serde_json::Value;
 use std::fmt;
+use thiserror::Error;
 
-use crate::data_structure::character_set::{get_char, get_code};
+use crate::data_structure::character_set::{get_char, get_code, CharacterSet};
 use crate::data_structure::save_data::TrainerID;
 use crate::misc::{
-    EXPERIENCE_TABLE, GENDER_THRESHOLD, ITEMS_G3, MOVES, NATURE, NATURE_MODIFIER, POKEDEX,
-    POKEDEX_JSON, SPECIES,
+    evolution, base_stats, find_move, ability, find_item, gender_ratio, growth_rate, hidden_ability, item_id_g3, move_data,
+    nat_dex_num, pk_species, typing, EXPERIENCE_TABLE, GENDER_THRESHOLD, /*MOVES,*/ NATURE,
+    NATURE_MODIFIER, /*POKEDEX_JSON,*/ SPECIES,
 };
+
+/// Errors related to Pokémon data handling.
+#[derive(Error, Debug)]
+pub enum PokemonError {
+    #[error("Invalid data length: expected 48 bytes, found {0}")]
+    InvalidDataLength(usize),
+
+    #[error("Species '{0}' not recognized")]
+    UnknownSpecies(String),
+
+    #[error("Gender ratio data missing for dex number {0}")]
+    MissingGenderRatio(u16),
+}
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Evolution {
+    prev: Option<[String; 2]>,
+    next: Option<Vec<[String; 2]>>,
+}
+
+impl Evolution {
+    pub fn prev_level(&mut self) -> Option<u8> {
+        if let Some(prev) = &self.prev {
+            let mut level_str = &prev[1].replace("Level ", "");
+            println!("{:?}", &level_str);
+            if let Ok(parsed_level) = level_str.parse::<u8>() {
+                Some(parsed_level)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct Pokemon {
@@ -26,6 +102,25 @@ pub struct Pokemon {
     _padding: [u8; 2],
     pokemon_data: PokemonData,
     stats: Stats,
+}
+
+impl fmt::Display for Pokemon {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "OT: {}\n\
+            Level: {}\n\
+            PID: {}\n\
+            Species: {}\n\
+            Nickname: {}\n\
+            ",
+            self.ot_name(),
+            self.level(),
+            self.personality_value(),
+            self.species(),
+            self.nickname(),
+        )
+    }
 }
 
 impl Pokemon {
@@ -106,6 +201,7 @@ impl Pokemon {
     }
 
     pub fn nickname(&self) -> String {
+        //let char_set = CharacterSet::new();
         let nickname = &self
             .nickname
             .iter()
@@ -144,7 +240,7 @@ impl Pokemon {
     }
 
     fn set_ot_name(&mut self, ot_name: &[u8]) {
-        self.ot_name.copy_from_slice(ot_name);
+        self.ot_name[..ot_name.len()].copy_from_slice(ot_name);
     }
 
     pub fn checksum(&self) -> u16 {
@@ -153,22 +249,27 @@ impl Pokemon {
 
     pub fn species(&self) -> String {
         let dex_num = self.nat_dex_number();
-        let index = dex_num.saturating_sub(1);
 
         if dex_num != 0 {
-            POKEDEX[index as usize].get(1).unwrap().to_string()
+            match pk_species(dex_num) {
+                Ok(species) => species,
+                Err(_) => String::from(""),
+            }
         } else {
-            "".to_string()
+            String::from("")
         }
     }
 
-    pub fn set_species(&mut self, species: &str) {
-        let mut id = POKEDEX_JSON
-            .iter()
-            .find(|p| p["name"]["english"] == species)
-            .unwrap()["id"]
-            .as_u64()
-            .unwrap() as u16;
+    pub fn set_species(&mut self, species: &str) -> Result<(), PokemonError> {
+
+        if self.species().to_uppercase() == self.nickname() {
+            self.set_nickname(&species.to_uppercase());
+        }
+
+        let mut id = match nat_dex_num(species) {
+            Ok(id) => id,
+            Err(e) => return Err(PokemonError::UnknownSpecies(species.to_string())),
+        };
 
         if id == 0 {
             id = 412;
@@ -178,6 +279,12 @@ impl Pokemon {
 
         let offset = self.pokemon_data.growth_offset;
         self.pokemon_data.data[offset..offset + 2].copy_from_slice(&id.to_le_bytes());
+
+        if self.lowest_level() > self.level() {
+            self.set_level(self.lowest_level());
+        }
+
+        Ok(())
     }
 
     pub fn nat_dex_number(&self) -> u16 {
@@ -216,13 +323,12 @@ impl Pokemon {
 
         let index = self.nat_dex_number();
 
-        let pokemon = POKEDEX
-            .iter()
-            .find(|mon| mon.get(0).unwrap().replace('#', "").parse::<u16>().unwrap() == index);
+        let growth = match growth_rate(index) {
+            Ok(growth) => growth,
+            Err(_) => String::from(""),
+        };
 
-        let growth = pokemon.unwrap().get(11);
-
-        let growth_index = growth_index(growth.unwrap());
+        let growth_index = growth_index(&growth);
 
         let experience = self.experience();
 
@@ -244,15 +350,14 @@ impl Pokemon {
 
     pub fn set_level(&mut self, level: u8) {
         let index = self.nat_dex_number();
+        println!("nat_dex_number: {:?}", &index);
+        let growth = match growth_rate(index) {
+            Ok(growth) => growth,
+            Err(_) => String::from(""),
+        };
 
-        let pokemon = POKEDEX
-            .iter()
-            .find(|mon| mon.get(0).unwrap().replace('#', "").parse::<u16>().unwrap() == index);
-
-        let growth = pokemon.unwrap().get(11);
-
-        let growth_index = growth_index(growth.unwrap());
-
+        let growth_index = growth_index(&growth);
+        println!("level: {:?}, growth_index: {:?}", &level, &growth_index);
         let experience = EXPERIENCE_TABLE[(level - 1) as usize][growth_index];
 
         let offset = self.pokemon_data.growth_offset;
@@ -266,32 +371,27 @@ impl Pokemon {
 
         let index = self.nat_dex_number();
 
-        let pokemon = POKEDEX
-            .iter()
-            .find(|mon| mon.get(0).unwrap().replace('#', "").parse::<u16>().unwrap() == index);
-
-        let type1 = pokemon.unwrap().get(2);
-        let type2 = pokemon.unwrap().get(3);
-
-        if type2 == Some("Nan") {
-            Some((type1.unwrap().to_string(), None))
-        } else {
-            Some((type1.unwrap().to_string(), Some(type2.unwrap().to_string())))
+        match typing(index) {
+            Ok(typing) => Some(typing),
+            Err(_) => None,
         }
     }
 
     pub fn ability(&self) -> String {
-        let index = self.nat_dex_number().saturating_sub(1) as usize;
+        let index = self.nat_dex_number();
         let ability_index = self.ability_index();
 
-        if self.is_empty() {
-            return String::from("");
+        match ability_index {
+            0 => match ability(index) {
+                Ok(ability) => ability,
+                Err(_) => String::from(""),
+            },
+            1 => match hidden_ability(index) {
+                Ok(ability) => ability,
+                Err(_) => String::from(""),
+            },
+            _ => String::from(""),
         }
-
-        POKEDEX_JSON[index]["profile"]["ability"][ability_index][0]
-            .as_str()
-            .unwrap()
-            .to_string()
     }
 
     pub fn moves(&self) -> Vec<(String, String, u8, u8)> {
@@ -312,59 +412,48 @@ impl Pokemon {
 
         let mut moves: Vec<(String, String, u8, u8)> = vec![];
 
-        let move1 = MOVES.iter().find(|&m| m["id"] == move1_index);
-        let move2 = MOVES.iter().find(|&m| m["id"] == move2_index);
-        let move3 = MOVES.iter().find(|&m| m["id"] == move3_index);
-        let move4 = MOVES.iter().find(|&m| m["id"] == move4_index);
+        let move1 = match move_data(move1_index) {
+            Ok(m) => Some(m),
+            Err(_) => None,
+        };
+        let move2 = match move_data(move2_index) {
+            Ok(m) => Some(m),
+            Err(_) => None,
+        };
+        let move3 = match move_data(move3_index) {
+            Ok(m) => Some(m),
+            Err(_) => None,
+        };
+        let move4 = match move_data(move4_index) {
+            Ok(m) => Some(m),
+            Err(_) => None,
+        };
 
         if let Some(p_move) = move1 {
-            moves.push((
-                p_move["type"].as_str().unwrap().to_string(),
-                p_move["ename"].as_str().unwrap().to_string(),
-                pp1[0],
-                p_move["pp"].as_u64().unwrap() as u8,
-            ));
+            moves.push((p_move.0, p_move.1, pp1[0], p_move.2));
         }
 
         if let Some(p_move) = move2 {
-            moves.push((
-                p_move["type"].as_str().unwrap().to_string(),
-                p_move["ename"].as_str().unwrap().to_string(),
-                pp2[0],
-                p_move["pp"].as_u64().unwrap() as u8,
-            ));
+            moves.push((p_move.0, p_move.1, pp2[0], p_move.2));
         }
 
         if let Some(p_move) = move3 {
-            moves.push((
-                p_move["type"].as_str().unwrap().to_string(),
-                p_move["ename"].as_str().unwrap().to_string(),
-                pp3[0],
-                p_move["pp"].as_u64().unwrap() as u8,
-            ));
+            moves.push((p_move.0, p_move.1, pp3[0], p_move.2));
         }
 
         if let Some(p_move) = move4 {
-            moves.push((
-                p_move["type"].as_str().unwrap().to_string(),
-                p_move["ename"].as_str().unwrap().to_string(),
-                pp4[0],
-                p_move["pp"].as_u64().unwrap() as u8,
-            ));
+            moves.push((p_move.0, p_move.1, pp4[0], p_move.2));
         }
 
         moves
     }
 
     pub fn set_move(&mut self, position: usize, attack: &str) {
-        if let Some(p_move) = MOVES.iter().find(|&m| m["ename"] == attack) {
+        if let Ok((i, pp)) = find_move(attack) {
             let offset = self.pokemon_data.attacks_offset;
 
-            let index = p_move["id"].as_u64().unwrap() as u16;
-            let pp = p_move["pp"].as_u64().unwrap() as u8;
-
             self.pokemon_data.data[offset + (position * 2)..offset + ((position * 2) + 2)]
-                .copy_from_slice(&index.to_le_bytes());
+                .copy_from_slice(&i.to_le_bytes());
 
             self.pokemon_data.data[offset + (position + 8)..offset + (position + 9)]
                 .copy_from_slice(&pp.to_le_bytes());
@@ -380,13 +469,10 @@ impl Pokemon {
             return String::from("-");
         }
 
-        let item_name = ITEMS_G3[held_item_index]
-            .get(1)
-            .unwrap()
-            .to_string()
-            .replace('*', "");
-
-        item_name
+        match find_item(held_item_index) {
+            Ok(i) => i,
+            Err(_) => String::from("-"),
+        }
     }
 
     pub fn pokeball_caught(&self) -> usize {
@@ -494,52 +580,55 @@ impl Pokemon {
     }
 
     fn init_stats(&mut self) {
-        let index = self.nat_dex_number().saturating_sub(1) as usize;
-        let nature_index = self.nature_index();
+        if let Ok(base_stats) = base_stats(&self.nat_dex_number()) {
+            let nature_index = self.nature_index();
 
-        let base_stats = &POKEDEX_JSON[index]["base"];
-        let ev_offset = self.pokemon_data.ev_offset;
+            let ev_offset = self.pokemon_data.ev_offset;
 
-        let iv_offset = self.pokemon_data.miscellaneous_offset;
+            let iv_offset = self.pokemon_data.miscellaneous_offset;
 
-        let ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
+            let ivs = LittleEndian::read_u32(&self.pokemon_data.data[iv_offset + 4..iv_offset + 8]);
 
-        self.stats = Stats {
-            // Base
-            hp: base_stats["HP"].as_u64().unwrap() as u16,
-            attack: base_stats["Attack"].as_u64().unwrap() as u16,
-            defense: base_stats["Defense"].as_u64().unwrap() as u16,
-            sp_attack: base_stats["Sp. Attack"].as_u64().unwrap() as u16,
-            sp_defense: base_stats["Sp. Defense"].as_u64().unwrap() as u16,
-            speed: base_stats["Speed"].as_u64().unwrap() as u16,
-            // Effort Values
-            hp_ev: self.pokemon_data.data[ev_offset..ev_offset + 1][0] as u16,
-            attack_ev: self.pokemon_data.data[ev_offset + 1..ev_offset + 2][0] as u16,
-            defense_ev: self.pokemon_data.data[ev_offset + 2..ev_offset + 3][0] as u16,
-            sp_attack_ev: self.pokemon_data.data[ev_offset + 4..ev_offset + 5][0] as u16,
-            sp_defense_ev: self.pokemon_data.data[ev_offset + 5..ev_offset + 6][0] as u16,
-            speed_ev: self.pokemon_data.data[ev_offset + 3..ev_offset + 4][0] as u16,
-            // Individual Values
-            // HP           0x1F        = 0b00000000000000000000000000011111
-            // Attack       0x3E0       = 0b00000000000000000000001111100000
-            // Defense      0x7C00      = 0b00000000000000000111110000000000
-            // Speed        0xF8000     = 0b00000000000011111000000000000000
-            // Sp Attack    0x1F00000   = 0b00000001111100000000000000000000
-            // Sp Defense   0x3E000000  = 0b00111110000000000000000000000000
-            hp_iv: (ivs & 0x1F) as u16,
-            attack_iv: ((ivs & 0x3E0) >> 5) as u16,
-            defense_iv: ((ivs & 0x7C00) >> 10) as u16,
-            speed_iv: ((ivs & 0xF8000) >> 15) as u16,
-            sp_attack_iv: ((ivs & 0x1F00000) >> 20) as u16,
-            sp_defense_iv: ((ivs & 0x3E000000) >> 25) as u16,
-            // Nature Modifiers
-            n_mod: NATURE_MODIFIER[nature_index],
-        };
+            self.stats = Stats {
+                // Base
+                hp: base_stats.0,
+                attack: base_stats.1,
+                defense: base_stats.2,
+                sp_attack: base_stats.3,
+                sp_defense: base_stats.4,
+                speed: base_stats.5,
+                // Effort Values
+                hp_ev: self.pokemon_data.data[ev_offset..ev_offset + 1][0] as u16,
+                attack_ev: self.pokemon_data.data[ev_offset + 1..ev_offset + 2][0] as u16,
+                defense_ev: self.pokemon_data.data[ev_offset + 2..ev_offset + 3][0] as u16,
+                sp_attack_ev: self.pokemon_data.data[ev_offset + 4..ev_offset + 5][0] as u16,
+                sp_defense_ev: self.pokemon_data.data[ev_offset + 5..ev_offset + 6][0] as u16,
+                speed_ev: self.pokemon_data.data[ev_offset + 3..ev_offset + 4][0] as u16,
+                // Individual Values
+                // HP           0x1F        = 0b00000000000000000000000000011111
+                // Attack       0x3E0       = 0b00000000000000000000001111100000
+                // Defense      0x7C00      = 0b00000000000000000111110000000000
+                // Speed        0xF8000     = 0b00000000000011111000000000000000
+                // Sp Attack    0x1F00000   = 0b00000001111100000000000000000000
+                // Sp Defense   0x3E000000  = 0b00111110000000000000000000000000
+                hp_iv: (ivs & 0x1F) as u16,
+                attack_iv: ((ivs & 0x3E0) >> 5) as u16,
+                defense_iv: ((ivs & 0x7C00) >> 10) as u16,
+                speed_iv: ((ivs & 0xF8000) >> 15) as u16,
+                sp_attack_iv: ((ivs & 0x1F00000) >> 20) as u16,
+                sp_defense_iv: ((ivs & 0x3E000000) >> 25) as u16,
+                // Nature Modifiers
+                n_mod: NATURE_MODIFIER[nature_index],
+            };
+        }
     }
 
     pub fn friendship(&self) -> u8 {
         let offset = self.pokemon_data.growth_offset;
-        self.pokemon_data.data[offset + 9..offset + 10][0]
+        self.pokemon_data
+            .data
+            .get(offset + 9..offset + 10)
+            .unwrap_or_default()[0]
     }
 
     pub fn set_friendship(&mut self, value: u8) {
@@ -591,22 +680,15 @@ impl Pokemon {
         let held_item_index = if item == "-" {
             0
         } else {
-            ITEMS_G3
-                .iter()
-                .find(|i| i.get(1).unwrap() == item)
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .parse::<u16>()
-                .unwrap()
+            item_id_g3(item).unwrap_or(0)
         };
 
         self.pokemon_data.data[offset + 2..offset + 4]
             .copy_from_slice(&held_item_index.to_le_bytes())
     }
 
-    pub fn raw_data(&self) -> [u8; 80] {
-        let mut raw_data: [u8; 80] = [0; 80];
+    pub fn raw_data(&self) -> [u8; 100] {
+        let mut raw_data: [u8; 100] = [0; 100];
         let mut data: [u8; 48] = [0; 48];
 
         let ecryption_key =
@@ -624,6 +706,16 @@ impl Pokemon {
         raw_data[0x1C..0x1E].copy_from_slice(&self.checksum);
         raw_data[0x1E..0x20].copy_from_slice(&self._padding);
         raw_data[0x20..0x50].copy_from_slice(&data);
+        raw_data[0x50..0x54].copy_from_slice(&0_u32.to_le_bytes());
+        raw_data[0x54..0x55].copy_from_slice(&self.level().to_le_bytes());
+        raw_data[0x55..0x56].copy_from_slice(&255_u8.to_le_bytes());
+        raw_data[0x56..0x58].copy_from_slice(&self.stats().hp(self.level()).to_le_bytes());
+        raw_data[0x58..0x5A].copy_from_slice(&self.stats().hp(self.level()).to_le_bytes());
+        raw_data[0x5A..0x5C].copy_from_slice(&self.stats().attack(self.level()).to_le_bytes());
+        raw_data[0x5C..0x5E].copy_from_slice(&self.stats().defense(self.level()).to_le_bytes());
+        raw_data[0x5E..0x60].copy_from_slice(&self.stats().speed(self.level()).to_le_bytes());
+        raw_data[0x60..0x62].copy_from_slice(&self.stats().sp_attack(self.level()).to_le_bytes());
+        raw_data[0x62..].copy_from_slice(&self.stats().sp_defense(self.level()).to_le_bytes());
 
         raw_data
     }
@@ -637,14 +729,10 @@ impl Pokemon {
     pub fn lowest_level(&self) -> u8 {
         let mut level: u8 = 1;
         if !self.is_empty() {
-            let index = self.nat_dex_number().saturating_sub(1) as usize;
-
-            let prev_evo = &POKEDEX_JSON[index]["evolution"]["prev"];
-
-            if prev_evo != &Value::Null && prev_evo[1].as_str().unwrap().contains("Level") {
-                let mut level_str = prev_evo[1].as_str().unwrap().to_string();
-                level_str.retain(|c| c.is_numeric());
-                level = level_str.parse::<u8>().unwrap();
+            if let Ok(mut evolution) = evolution(&self.nat_dex_number()) {
+                if let Some(prev_level) = evolution.prev_level() {
+                    level = prev_level;
+                }
             }
         }
 
@@ -1173,24 +1261,11 @@ fn growth_index(growth: &str) -> usize {
     }
 }
 
-fn gender_threshold(index: usize) -> u32 {
-    let pokemon = POKEDEX.iter().find(|mon| {
-        mon.get(0)
-            .unwrap()
-            .replace('#', "")
-            .parse::<usize>()
-            .unwrap()
-            == index
-    });
-
-    let gender_m = pokemon.unwrap().get(12);
-    let gender_f = pokemon.unwrap().get(13);
-
-    let gender = format!(
-        "{}:{}",
-        gender_m.unwrap().replace("% male", ""),
-        gender_f.unwrap().replace("% female", "").trim()
-    );
+fn gender_threshold(dex_num: u16) -> u32 {
+    let gender = match gender_ratio(dex_num) {
+        Ok(ratio) => ratio,
+        Err(_) => String::from(""),
+    };
 
     let mut iter = GENDER_THRESHOLD
         .iter()
@@ -1228,7 +1303,7 @@ fn recalc_iv(new_iv: u16) -> u16 {
 
 // generating PIDs is buggy, still don't understand why or how
 pub fn gen_pokemon_from_species(
-    pokemon: &mut Pokemon,
+    pokemon_offset: usize,
     species: &str,
     ot_name: &[u8],
     ot_id: &[u8],
@@ -1249,10 +1324,10 @@ pub fn gen_pokemon_from_species(
 
     let p: u32 = gen_p(&mut seed);
 
-    let mut new_pokemon = Pokemon::new(pokemon.offset(), &dummy);
+    let mut new_pokemon = Pokemon::new(pokemon_offset, &dummy);
 
     new_pokemon.set_personality_value(p);
-    //new_pokemon.set_personality_value(587584645);
+    new_pokemon.set_personality_value(587584645);
 
     new_pokemon.set_species(species);
     new_pokemon.set_level(new_pokemon.lowest_level());
@@ -1284,11 +1359,11 @@ fn rng(state: &mut u32) -> u32 {
 
 // generating PIDs is buggy, still don't understand why or how
 fn gen_p(seed: &mut u32) -> u32 {
-    //let mut rng = rand::thread_rng();
+    let mut t_rng = rand::thread_rng();
     // for some still unknown reason, the program has a strange behaviour que using some ranbom number to generate a PID
-    //let mut seed: u32 = rng.gen();
-    let p_h: u32 = rng(seed);
-    let p_l: u32 = rng(seed);
+    let mut seed: u32 = t_rng.gen();
+    let p_h: u32 = rng(&mut seed);
+    let p_l: u32 = rng(&mut seed);
 
     p_l | (p_h << 16)
 }
@@ -1299,7 +1374,7 @@ fn gender_from_p(p: u32, dex_num: u16) -> Gender {
     if p == 0 {
         Gender::None
     } else {
-        let threshold = gender_threshold(dex_num.into());
+        let threshold = gender_threshold(dex_num);
 
         if threshold == 255 {
             Gender::None
