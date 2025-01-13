@@ -1,5 +1,4 @@
 use rusqlite::{Connection, Result};
-use serde_json::Value;
 use std::fs::File;
 use std::io::Write;
 use crate::Evolution;
@@ -166,30 +165,6 @@ pub const NATURE_MODIFIER: [[f32; 5]; 25] = [
 ];
 
 const DB: &[u8] = include_bytes!("../pk_edit.db");
-/*const POKEDEX_BYTES: &[u8] = include_bytes!("../pokedex.csv");
-const POKEDEX_JSON_BYTES: &[u8] = include_bytes!("../pokedex.json");
-const MOVES_BYTES: &[u8] = include_bytes!("../moves.json");
-const MOVES_G3_BYTES: &[u8] = include_bytes!("../moves.csv");
-const ITEMS_BYTES: &[u8] = include_bytes!("../items.json");
-const ITEMS_G3_BYTES: &[u8] = include_bytes!("../items.csv");
-
-lazy_static! {
-    pub static ref POKEDEX_JSON: Vec<Value> = serde_json::from_reader(POKEDEX_JSON_BYTES).unwrap();
-    pub static ref POKEDEX: Vec<csv::StringRecord> = Reader::from_reader(POKEDEX_BYTES)
-        .records()
-        .map(|record| record.unwrap())
-        .collect();
-    pub static ref MOVES: Vec<Value> = serde_json::from_reader(MOVES_BYTES).unwrap();
-    pub static ref MOVES_G3: Vec<csv::StringRecord> = Reader::from_reader(MOVES_G3_BYTES)
-        .records()
-        .map(|record| record.unwrap())
-        .collect();
-    pub static ref ITEMS: Vec<Value> = serde_json::from_reader(ITEMS_BYTES).unwrap();
-    pub static ref ITEMS_G3: Vec<csv::StringRecord> = Reader::from_reader(ITEMS_G3_BYTES)
-        .records()
-        .map(|record| record.unwrap())
-        .collect();
-}*/
 
 pub fn extract_db() -> std::io::Result<()> {
     let mut f = File::create_new("./pk_edit.db")?;
@@ -315,14 +290,6 @@ pub fn key_items() -> Result<Vec<String>> {
 
     Ok(res)
 }
-
-/*pub fn transpose_item(name: &str) -> Option<usize> {
-    let name = match_item_name(name);
-
-    let item = ITEMS.iter().find(|&item| item["name"]["english"] == name);
-
-    item.map(|item| item["id"].as_u64().unwrap() as usize)
-}*/
 
 pub fn find_item(id_g3: usize) -> Result<String> {
     let conn = Connection::open("pk_edit.db")?;

@@ -197,6 +197,171 @@ fn get_char_set() -> [&'static str; 256] {
     char_set
 }
 
+fn get_byte_set() -> HashMap<&'static str, u8> {
+    let mut char_to_byte = HashMap::new();
+    char_to_byte.insert(" ", 0x00);
+    char_to_byte.insert("À", 0x01);
+    char_to_byte.insert("Á", 0x02);
+    char_to_byte.insert("Â", 0x03);
+    char_to_byte.insert("Ç", 0x04);
+    char_to_byte.insert("È", 0x05);
+    char_to_byte.insert("É", 0x06);
+    char_to_byte.insert("Ê", 0x07);
+    char_to_byte.insert("Ë", 0x08);
+    char_to_byte.insert("Ì", 0x09);
+    char_to_byte.insert("Î", 0x0B);
+    char_to_byte.insert("Ï", 0x0C);
+    char_to_byte.insert("Ò", 0x0D);
+    char_to_byte.insert("Ó", 0x0E);
+    char_to_byte.insert("Ô", 0x0F);
+    char_to_byte.insert("Œ", 0x10);
+    char_to_byte.insert("Ù", 0x11);
+    char_to_byte.insert("Ú", 0x12);
+    char_to_byte.insert("Û", 0x13);
+    char_to_byte.insert("Ñ", 0x14);
+    char_to_byte.insert("ß", 0x15);
+    char_to_byte.insert("à", 0x16);
+    char_to_byte.insert("á", 0x17);
+    char_to_byte.insert("ç", 0x19);
+    char_to_byte.insert("è", 0x1A);
+    char_to_byte.insert("é", 0x1B);
+    char_to_byte.insert("ê", 0x1C);
+    char_to_byte.insert("ë", 0x1D);
+    char_to_byte.insert("ì", 0x1E);
+    char_to_byte.insert("î", 0x20);
+    char_to_byte.insert("ï", 0x21);
+    char_to_byte.insert("ò", 0x22);
+    char_to_byte.insert("ó", 0x23);
+    char_to_byte.insert("ô", 0x24);
+    char_to_byte.insert("œ", 0x25);
+    char_to_byte.insert("ù", 0x26);
+    char_to_byte.insert("ú", 0x27);
+    char_to_byte.insert("û", 0x28);
+    char_to_byte.insert("ñ", 0x29);
+    char_to_byte.insert("º", 0x2A);
+    char_to_byte.insert("ª", 0x2B);
+    char_to_byte.insert("ᵉʳ", 0x2C);
+    char_to_byte.insert("&", 0x2D);
+    char_to_byte.insert("+", 0x2E);
+    char_to_byte.insert("Lv", 0x34);
+    char_to_byte.insert("=", 0x35);
+    char_to_byte.insert(";", 0x36);
+    char_to_byte.insert("▯", 0x50);
+    char_to_byte.insert("¿", 0x51);
+    char_to_byte.insert("¡", 0x52);
+    char_to_byte.insert("Í", 0x5A);
+    char_to_byte.insert("%", 0x5B);
+    char_to_byte.insert("(", 0x5C);
+    char_to_byte.insert(")", 0x5D);
+    char_to_byte.insert(" ", 0x5E);
+    char_to_byte.insert(" ", 0x5F);
+    char_to_byte.insert("â", 0x68);
+    char_to_byte.insert("í", 0x6F);
+    char_to_byte.insert("↑", 0x79);
+    char_to_byte.insert("↓", 0x7A);
+    char_to_byte.insert("←", 0x7B);
+    char_to_byte.insert("→", 0x7C);
+    char_to_byte.insert("*", 0x7D);
+    char_to_byte.insert("*", 0x7E);
+    char_to_byte.insert("*", 0x7F);
+    char_to_byte.insert("*", 0x80);
+    char_to_byte.insert("*", 0x81);
+    char_to_byte.insert("*", 0x82);
+    char_to_byte.insert("*", 0x83);
+    char_to_byte.insert("ᵉ", 0x84);
+    char_to_byte.insert("<", 0x85);
+    char_to_byte.insert(">", 0x86);
+    char_to_byte.insert("ʳᵉ", 0xA0);
+    char_to_byte.insert("0", 0xA1);
+    char_to_byte.insert("1", 0xA2);
+    char_to_byte.insert("2", 0xA3);
+    char_to_byte.insert("3", 0xA4);
+    char_to_byte.insert("4", 0xA5);
+    char_to_byte.insert("5", 0xA6);
+    char_to_byte.insert("6", 0xA7);
+    char_to_byte.insert("7", 0xA8);
+    char_to_byte.insert("8", 0xA9);
+    char_to_byte.insert("9", 0xAA);
+    char_to_byte.insert("!", 0xAB);
+    char_to_byte.insert("?", 0xAC);
+    char_to_byte.insert(".", 0xAD);
+    char_to_byte.insert("-", 0xAE);
+    char_to_byte.insert("・", 0xAF);
+    char_to_byte.insert("…", 0xB0);
+    char_to_byte.insert("“", 0xB1);
+    char_to_byte.insert("”", 0xB2);
+    char_to_byte.insert("‘", 0xB3);
+    char_to_byte.insert("’", 0xB4);
+    char_to_byte.insert("♂", 0xB5);
+    char_to_byte.insert("♀", 0xB6);
+    char_to_byte.insert("$", 0xB7);
+    char_to_byte.insert(",", 0xB8);
+    char_to_byte.insert("×", 0xB9);
+    char_to_byte.insert("/", 0xBA);
+    char_to_byte.insert("A", 0xBB);
+    char_to_byte.insert("B", 0xBC);
+    char_to_byte.insert("C", 0xBD);
+    char_to_byte.insert("D", 0xBE);
+    char_to_byte.insert("E", 0xBF);
+    char_to_byte.insert("F", 0xC0);
+    char_to_byte.insert("G", 0xC1);
+    char_to_byte.insert("H", 0xC2);
+    char_to_byte.insert("I", 0xC3);
+    char_to_byte.insert("J", 0xC4);
+    char_to_byte.insert("K", 0xC5);
+    char_to_byte.insert("L", 0xC6);
+    char_to_byte.insert("M", 0xC7);
+    char_to_byte.insert("N", 0xC8);
+    char_to_byte.insert("O", 0xC9);
+    char_to_byte.insert("P", 0xCA);
+    char_to_byte.insert("Q", 0xCB);
+    char_to_byte.insert("R", 0xCC);
+    char_to_byte.insert("S", 0xCD);
+    char_to_byte.insert("T", 0xCE);
+    char_to_byte.insert("U", 0xCF);
+    char_to_byte.insert("V", 0xD0);
+    char_to_byte.insert("W", 0xD1);
+    char_to_byte.insert("X", 0xD2);
+    char_to_byte.insert("Y", 0xD3);
+    char_to_byte.insert("Z", 0xD4);
+    char_to_byte.insert("a", 0xD5);
+    char_to_byte.insert("b", 0xD6);
+    char_to_byte.insert("c", 0xD7);
+    char_to_byte.insert("d", 0xD8);
+    char_to_byte.insert("e", 0xD9);
+    char_to_byte.insert("f", 0xDA);
+    char_to_byte.insert("g", 0xDB);
+    char_to_byte.insert("h", 0xDC);
+    char_to_byte.insert("i", 0xDD);
+    char_to_byte.insert("j", 0xDE);
+    char_to_byte.insert("k", 0xDF);
+    char_to_byte.insert("l", 0xE0);
+    char_to_byte.insert("m", 0xE1);
+    char_to_byte.insert("n", 0xE2);
+    char_to_byte.insert("o", 0xE3);
+    char_to_byte.insert("p", 0xE4);
+    char_to_byte.insert("q", 0xE5);
+    char_to_byte.insert("r", 0xE6);
+    char_to_byte.insert("s", 0xE7);
+    char_to_byte.insert("t", 0xE8);
+    char_to_byte.insert("u", 0xE9);
+    char_to_byte.insert("v", 0xEA);
+    char_to_byte.insert("w", 0xEB);
+    char_to_byte.insert("x", 0xEC);
+    char_to_byte.insert("y", 0xED);
+    char_to_byte.insert("z", 0xEE);
+    char_to_byte.insert("►", 0xEF);
+    char_to_byte.insert(":", 0xF0);
+    char_to_byte.insert("Ä", 0xF1);
+    char_to_byte.insert("Ö", 0xF2);
+    char_to_byte.insert("Ü", 0xF3);
+    char_to_byte.insert("ä", 0xF4);
+    char_to_byte.insert("ö", 0xF5);
+    char_to_byte.insert("ü", 0xF6);
+
+    char_to_byte
+}
+
 /// Retrieves the character corresponding to a given byte index.
 ///
 /// # Errors
@@ -212,250 +377,5 @@ pub fn get_char(index: usize) -> &'static str {
 /// # Errors
 /// Returns `CharacterSetError::CharacterNotFound` if the character is not in the character set.
 pub fn get_code(s: &str) -> u8 {
-    get_char_set().iter().position(|&c| c == s).unwrap() as u8
-}
-
-/// Provides mapping between byte values and characters specific to Pokémon games using a single `HashMap`.
-/// This supports encoding text fields like Pokémon nicknames or trainer names into the game's custom format.
-///
-/// Pokémon games use a custom 256-character set for text storage in save files. This module maps these
-/// characters to Unicode for user-friendly manipulation and vice versa.
-///
-/// ## Usage
-/// - Use `get_char` to retrieve the character for a specific byte.
-/// - Use `get_code` to retrieve the byte for a specific character.
-pub struct CharacterSet {
-    /// Mapping from byte to character.
-    byte_to_char: HashMap<u8, &'static str>,
-    char_to_byte: HashMap<&'static str, u8>,
-}
-
-impl Default for CharacterSet {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CharacterSet {
-    /// Creates a new `CharacterSet` with predefined mappings.
-    pub fn new() -> Self {
-        let byte_to_char = get_complete_char_set();
-        let mut char_to_byte = HashMap::new();
-
-        // Populate reverse mapping
-        for (byte, &character) in &byte_to_char {
-            char_to_byte.insert(character, *byte);
-        }
-
-        Self {
-            byte_to_char,
-            char_to_byte,
-        }
-    }
-
-    /// Retrieves the character corresponding to a given byte.
-    /// # Errors
-    /// Returns `CharacterSetError::InvalidIndex` if the index is not within the valid range (0-255).
-    pub fn get_char(&self, byte: u8) -> Result<&'static str, CharacterSetError> {
-        self.byte_to_char
-            .get(&byte)
-            .copied()
-            .ok_or(CharacterSetError::ByteNotFound(byte))
-    }
-
-    /// Retrieves the byte corresponding to a given character by searching the `byte_to_char` map.
-    /// # Errors
-    /// Returns `CharacterSetError::CharacterNotFound` if the character is not in the character set.
-    pub fn get_code(&self, character: &str) -> Result<u8, CharacterSetError> {
-        self.char_to_byte
-            .get(character)
-            .copied()
-            .ok_or_else(|| CharacterSetError::CharacterNotFound(character.to_string()))
-    }
-
-    /// Encodes a string into a vector of bytes, skipping unsupported characters.
-    pub fn encode_string(&self, input: &str) -> Result<Vec<u8>, CharacterSetError> {
-        input
-            .chars()
-            .map(|c| self.get_code(&c.to_string()))
-            .collect()
-    }
-
-    /// Decodes a vector of bytes into a string, skipping invalid bytes.
-    pub fn decode_string(&self, input: &[u8]) -> Result<String, CharacterSetError> {
-        input
-            .iter()
-            .map(|&b| self.get_char(b))
-            .collect::<Result<Vec<_>, _>>()
-            .map(|chars| chars.concat())
-    }
-}
-
-/// Provides a complete mapping of byte values to characters for Pokémon Gen III games.
-/// This mapping supports encoding/decoding of in-game text such as trainer names or Pokémon nicknames.
-pub fn get_complete_char_set() -> HashMap<u8, &'static str> {
-    let mut byte_to_char = HashMap::new();
-
-    // Known character mappings from the game's character set.
-    byte_to_char.insert(0x00, " ");
-    byte_to_char.insert(0x01, "À");
-    byte_to_char.insert(0x02, "Á");
-    byte_to_char.insert(0x03, "Â");
-    byte_to_char.insert(0x04, "Ç");
-    byte_to_char.insert(0x05, "È");
-    byte_to_char.insert(0x06, "É");
-    byte_to_char.insert(0x07, "Ê");
-    byte_to_char.insert(0x08, "Ë");
-    byte_to_char.insert(0x09, "Ì");
-    byte_to_char.insert(0x0B, "Î");
-    byte_to_char.insert(0x0C, "Ï");
-    byte_to_char.insert(0x0D, "Ò");
-    byte_to_char.insert(0x0E, "Ó");
-    byte_to_char.insert(0x0F, "Ô");
-    byte_to_char.insert(0x10, "Œ");
-    byte_to_char.insert(0x11, "Ù");
-    byte_to_char.insert(0x12, "Ú");
-    byte_to_char.insert(0x13, "Û");
-    byte_to_char.insert(0x14, "Ñ");
-    byte_to_char.insert(0x15, "ß");
-    byte_to_char.insert(0x16, "à");
-    byte_to_char.insert(0x17, "á");
-    byte_to_char.insert(0x19, "ç");
-    byte_to_char.insert(0x1A, "è");
-    byte_to_char.insert(0x1B, "é");
-    byte_to_char.insert(0x1C, "ê");
-    byte_to_char.insert(0x1D, "ë");
-    byte_to_char.insert(0x1E, "ì");
-    byte_to_char.insert(0x20, "î");
-    byte_to_char.insert(0x21, "ï");
-    byte_to_char.insert(0x22, "ò");
-    byte_to_char.insert(0x23, "ó");
-    byte_to_char.insert(0x24, "ô");
-    byte_to_char.insert(0x25, "œ");
-    byte_to_char.insert(0x26, "ù");
-    byte_to_char.insert(0x27, "ú");
-    byte_to_char.insert(0x28, "û");
-    byte_to_char.insert(0x29, "ñ");
-    byte_to_char.insert(0x2A, "º");
-    byte_to_char.insert(0x2B, "ª");
-    byte_to_char.insert(0x2C, "ᵉʳ");
-    byte_to_char.insert(0x2D, "&");
-    byte_to_char.insert(0x2E, "+");
-    byte_to_char.insert(0x34, "Lv");
-    byte_to_char.insert(0x35, "=");
-    byte_to_char.insert(0x36, ";");
-    byte_to_char.insert(0x50, "▯");
-    byte_to_char.insert(0x51, "¿");
-    byte_to_char.insert(0x52, "¡");
-    byte_to_char.insert(0x5A, "Í");
-    byte_to_char.insert(0x5B, "%");
-    byte_to_char.insert(0x5C, "(");
-    byte_to_char.insert(0x5D, ")");
-    byte_to_char.insert(0x5E, " ");
-    byte_to_char.insert(0x5F, " ");
-    byte_to_char.insert(0x68, "â");
-    byte_to_char.insert(0x6F, "í");
-    byte_to_char.insert(0x79, "↑");
-    byte_to_char.insert(0x7A, "↓");
-    byte_to_char.insert(0x7B, "←");
-    byte_to_char.insert(0x7C, "→");
-    byte_to_char.insert(0x7D, "*");
-    byte_to_char.insert(0x7E, "*");
-    byte_to_char.insert(0x7F, "*");
-    byte_to_char.insert(0x80, "*");
-    byte_to_char.insert(0x81, "*");
-    byte_to_char.insert(0x82, "*");
-    byte_to_char.insert(0x83, "*");
-    byte_to_char.insert(0x84, "ᵉ");
-    byte_to_char.insert(0x85, "<");
-    byte_to_char.insert(0x86, ">");
-    byte_to_char.insert(0xA0, "ʳᵉ");
-    byte_to_char.insert(0xA1, "0");
-    byte_to_char.insert(0xA2, "1");
-    byte_to_char.insert(0xA3, "2");
-    byte_to_char.insert(0xA4, "3");
-    byte_to_char.insert(0xA5, "4");
-    byte_to_char.insert(0xA6, "5");
-    byte_to_char.insert(0xA7, "6");
-    byte_to_char.insert(0xA8, "7");
-    byte_to_char.insert(0xA9, "8");
-    byte_to_char.insert(0xAA, "9");
-    byte_to_char.insert(0xAB, "!");
-    byte_to_char.insert(0xAC, "?");
-    byte_to_char.insert(0xAD, ".");
-    byte_to_char.insert(0xAE, "-");
-    byte_to_char.insert(0xAF, "・");
-    byte_to_char.insert(0xB0, "…");
-    byte_to_char.insert(0xB1, "“");
-    byte_to_char.insert(0xB2, "”");
-    byte_to_char.insert(0xB3, "‘");
-    byte_to_char.insert(0xB4, "’");
-    byte_to_char.insert(0xB5, "♂");
-    byte_to_char.insert(0xB6, "♀");
-    byte_to_char.insert(0xB7, "$");
-    byte_to_char.insert(0xB8, ",");
-    byte_to_char.insert(0xB9, "×");
-    byte_to_char.insert(0xBA, "/");
-    byte_to_char.insert(0xBB, "A");
-    byte_to_char.insert(0xBC, "B");
-    byte_to_char.insert(0xBD, "C");
-    byte_to_char.insert(0xBE, "D");
-    byte_to_char.insert(0xBF, "E");
-    byte_to_char.insert(0xC0, "F");
-    byte_to_char.insert(0xC1, "G");
-    byte_to_char.insert(0xC2, "H");
-    byte_to_char.insert(0xC3, "I");
-    byte_to_char.insert(0xC4, "J");
-    byte_to_char.insert(0xC5, "K");
-    byte_to_char.insert(0xC6, "L");
-    byte_to_char.insert(0xC7, "M");
-    byte_to_char.insert(0xC8, "N");
-    byte_to_char.insert(0xC9, "O");
-    byte_to_char.insert(0xCA, "P");
-    byte_to_char.insert(0xCB, "Q");
-    byte_to_char.insert(0xCC, "R");
-    byte_to_char.insert(0xCD, "S");
-    byte_to_char.insert(0xCE, "T");
-    byte_to_char.insert(0xCF, "U");
-    byte_to_char.insert(0xD0, "V");
-    byte_to_char.insert(0xD1, "W");
-    byte_to_char.insert(0xD2, "X");
-    byte_to_char.insert(0xD3, "Y");
-    byte_to_char.insert(0xD4, "Z");
-    byte_to_char.insert(0xD5, "a");
-    byte_to_char.insert(0xD6, "b");
-    byte_to_char.insert(0xD7, "c");
-    byte_to_char.insert(0xD8, "d");
-    byte_to_char.insert(0xD9, "e");
-    byte_to_char.insert(0xDA, "f");
-    byte_to_char.insert(0xDB, "g");
-    byte_to_char.insert(0xDC, "h");
-    byte_to_char.insert(0xDD, "i");
-    byte_to_char.insert(0xDE, "j");
-    byte_to_char.insert(0xDF, "k");
-    byte_to_char.insert(0xE0, "l");
-    byte_to_char.insert(0xE1, "m");
-    byte_to_char.insert(0xE2, "n");
-    byte_to_char.insert(0xE3, "o");
-    byte_to_char.insert(0xE4, "p");
-    byte_to_char.insert(0xE5, "q");
-    byte_to_char.insert(0xE6, "r");
-    byte_to_char.insert(0xE7, "s");
-    byte_to_char.insert(0xE8, "t");
-    byte_to_char.insert(0xE9, "u");
-    byte_to_char.insert(0xEA, "v");
-    byte_to_char.insert(0xEB, "w");
-    byte_to_char.insert(0xEC, "x");
-    byte_to_char.insert(0xED, "y");
-    byte_to_char.insert(0xEE, "z");
-    byte_to_char.insert(0xEF, "►");
-    byte_to_char.insert(0xF0, ":");
-    byte_to_char.insert(0xF1, "Ä");
-    byte_to_char.insert(0xF2, "Ö");
-    byte_to_char.insert(0xF3, "Ü");
-    byte_to_char.insert(0xF4, "ä");
-    byte_to_char.insert(0xF5, "ö");
-    byte_to_char.insert(0xF6, "ü");
-
-    byte_to_char
+    *get_byte_set().get(s).unwrap()
 }

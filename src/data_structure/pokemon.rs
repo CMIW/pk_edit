@@ -39,11 +39,10 @@
 //! ```
 use byteorder::{ByteOrder, LittleEndian};
 use rand::Rng;
-use serde_json::Value;
 use std::fmt;
 use thiserror::Error;
 
-use crate::data_structure::character_set::{get_char, get_code, CharacterSet};
+use crate::data_structure::character_set::{get_char, get_code};
 use crate::data_structure::save_data::TrainerID;
 use crate::misc::{
     evolution, base_stats, find_move, ability, find_item, gender_ratio, growth_rate, hidden_ability, item_id_g3, move_data,
@@ -75,8 +74,8 @@ pub struct Evolution {
 impl Evolution {
     pub fn prev_level(&mut self) -> Option<u8> {
         if let Some(prev) = &self.prev {
-            let mut level_str = &prev[1].replace("Level ", "");
-            println!("{:?}", &level_str);
+            let level_str = &prev[1].replace("Level ", "");
+
             if let Ok(parsed_level) = level_str.parse::<u8>() {
                 Some(parsed_level)
             } else {
@@ -139,7 +138,6 @@ impl Pokemon {
         // The order of the structures is determined by the personality value of the Pokémon modulo 24
         let personality_value_modulo = LittleEndian::read_u32(&buffer[0x00..0x04]) % 24;
         let mut pokemon_data = PokemonData::new(data);
-
         order_data_substructure(personality_value_modulo, &mut pokemon_data);
 
         let mut personality_value = [0; 4];
@@ -268,7 +266,7 @@ impl Pokemon {
 
         let mut id = match nat_dex_num(species) {
             Ok(id) => id,
-            Err(e) => return Err(PokemonError::UnknownSpecies(species.to_string())),
+            Err(_) => return Err(PokemonError::UnknownSpecies(species.to_string())),
         };
 
         if id == 0 {
@@ -292,6 +290,7 @@ impl Pokemon {
         if species == 412 {
             return 0;
         }
+
         if species >= 277 {
             return (SPECIES
                 .iter()
@@ -323,41 +322,26 @@ impl Pokemon {
 
         let index = self.nat_dex_number();
 
+
         let growth = match growth_rate(index) {
             Ok(growth) => growth,
             Err(_) => String::from(""),
         };
 
-        let growth_index = growth_index(&growth);
-
-        let experience = self.experience();
-
-        let mut iter = EXPERIENCE_TABLE.iter().peekable();
-
-        while let Some(current) = iter.next() {
-            if let Some(peek) = iter.peek() {
-                if current[growth_index] <= experience && experience < peek[growth_index] {
-                    level = current[6];
-                    break;
-                }
-            } else {
-                level = current[6];
-            }
-        }
+        level = find_level(self.experience(), growth_index(&growth));
 
         level as u8
     }
 
     pub fn set_level(&mut self, level: u8) {
         let index = self.nat_dex_number();
-        println!("nat_dex_number: {:?}", &index);
+
         let growth = match growth_rate(index) {
             Ok(growth) => growth,
             Err(_) => String::from(""),
         };
 
         let growth_index = growth_index(&growth);
-        println!("level: {:?}, growth_index: {:?}", &level, &growth_index);
         let experience = EXPERIENCE_TABLE[(level - 1) as usize][growth_index];
 
         let offset = self.pokemon_data.growth_offset;
@@ -539,8 +523,9 @@ impl Pokemon {
                 break personality_value;
             }
         };
-
-        self.personality_value.copy_from_slice(&new_p.to_le_bytes());
+        let caught = self.pokeball_caught();
+        self.set_personality_value(new_p);
+        self.set_pokeball_caught(caught as u16);
     }
 
     fn save_stats(&mut self) {
@@ -642,6 +627,7 @@ impl Pokemon {
 
     fn set_personality_value(&mut self, value: u32) {
         self.personality_value.copy_from_slice(&value.to_le_bytes());
+        order_data_substructure(value % 24, &mut self.pokemon_data);
     }
 
     pub fn infect_pokerus(&mut self) {
@@ -1257,7 +1243,7 @@ fn growth_index(growth: &str) -> usize {
         "Medium Slow" => 3,
         "Slow" => 4,
         "Fluctuating" => 5,
-        _ => 7,
+        _ => 0,
     }
 }
 
@@ -1303,33 +1289,19 @@ fn recalc_iv(new_iv: u16) -> u16 {
 
 // generating PIDs is buggy, still don't understand why or how
 pub fn gen_pokemon_from_species(
-    pokemon_offset: usize,
+    mut new_pokemon: Pokemon,
     species: &str,
     ot_name: &[u8],
     ot_id: &[u8],
-) -> Pokemon {
-    let dummy = [
-        101, 231, 167, 198, 154, 166, 220, 6, 206, 201, 204, 189, 194, 195, 189, 255, 1, 0, 2, 2,
-        195, 213, 226, 255, 255, 255, 255, 0, 49, 30, 0, 0, 255, 65, 123, 193, 255, 65, 123, 192,
-        255, 65, 123, 192, 231, 64, 123, 192, 103, 65, 123, 192, 255, 7, 123, 192, 255, 81, 254,
-        225, 69, 32, 147, 217, 255, 65, 123, 192, 245, 65, 86, 192, 255, 65, 123, 192, 220, 105,
-        123, 192, 0, 0, 0, 0, 5, 255, 20, 0, 20, 0, 11, 0, 10, 0, 9, 0, 14, 0, 10, 0,
-    ];
-    //587584645
-    //428966877
-    //565740844
-    //2590028500
-    //926709307
+) -> anyhow::Result<Pokemon> {
     let mut seed: u32 = 0x5A0;
 
     let p: u32 = gen_p(&mut seed);
 
-    let mut new_pokemon = Pokemon::new(pokemon_offset, &dummy);
-
     new_pokemon.set_personality_value(p);
-    new_pokemon.set_personality_value(587584645);
+    //new_pokemon.set_personality_value(587584645);
 
-    new_pokemon.set_species(species);
+    new_pokemon.set_species(species)?;
     new_pokemon.set_level(new_pokemon.lowest_level());
     new_pokemon.set_pokeball_caught(4);
     new_pokemon.set_ot_id(ot_id);
@@ -1340,7 +1312,7 @@ pub fn gen_pokemon_from_species(
 
     new_pokemon.update_checksum();
 
-    new_pokemon
+    Ok(new_pokemon)
 }
 
 const MULTIPLIER: u32 = 1103515245;
@@ -1350,6 +1322,24 @@ const INCREMENT: u32 = 24691;
 fn rng(state: &mut u32) -> u32 {
     *state = state.wrapping_mul(MULTIPLIER).wrapping_add(INCREMENT);
     *state >> 16
+}
+
+fn find_level(target: u32, index: usize) -> u32 {
+    let mut i = 0;
+    let mut j = 99;
+    let mut res = 1;
+    while i <= j {
+        let mid = (i+j) / 2;
+        let value = EXPERIENCE_TABLE[mid][index];
+
+        if value <= target {
+            res = EXPERIENCE_TABLE[mid][6];
+            i = mid + 1;        // Look for a larger `i`
+        } else {
+            j = mid - 1;       // Look for a smaller `i`
+        }
+    }
+    res
 }
 
 /*fn anti_rng(state: u32) -> u32 {

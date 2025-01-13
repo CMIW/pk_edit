@@ -114,12 +114,54 @@ const GAME_SAVE_B_OFFSET: usize = 0x00E000;
 /// Representation of the Save File.
 ///
 /// The Generation III save file is broken up into two game save blocks (Game Save A, Game Save B), each of which is broken up into 14 4KB sections.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct SaveFile {
     game_save_a: [Section; NUMBER_GAME_SAVE_SECTIONS],
     game_save_b: [Section; NUMBER_GAME_SAVE_SECTIONS],
     data: Vec<u8>,
     pc_buffer: PCBuffer,
+}
+
+pub enum Pocket {
+    Items,
+    Pokeballs,
+    Berries,
+    Tms,
+    Key,
+}
+
+fn pocket_address(pocket: Pocket, game_code: u32) -> (usize, usize) {
+    // For Ruby and Sapphire, this value will be 0x00000000.
+    // For FireRed and LeafGreen, this value will be 0x00000001.
+    // For Emerald any value other than 0 or 1 can be used.
+    // Determine offsets dynamically based on game version
+    match pocket {
+        Pocket::Items => match game_code {
+            0x00000000 => (0x0560, 0x05B0), // Ruby/Sapphire
+            0x00000001 => (0x0310, 0x03B8), // FireRed/LeafGreen
+            _ => (0x0560, 0x05D8),          // Emerald
+        },
+        Pocket::Pokeballs => match game_code {
+            0x00000000 => (0x0600, 0x0640), // Ruby/Sapphire
+            0x00000001 => (0x0430, 0x0464), // FireRed/LeafGreen
+            _ => (0x0650, 0x0690),          // Emerald
+        },
+        Pocket::Berries => match game_code {
+            0x00000000 => (0x0740, 0x7F8), // Ruby/Sapphire
+            0x00000001 => (0x054C, 0x5F8), // FireRed/LeafGreen
+            _ => (0x0790, 0x848),          // Emerald
+        },
+        Pocket::Tms => match game_code {
+            0x00000000 => (0x0640, 0x0740), // Ruby/Sapphire
+            0x00000001 => (0x0464, 0x054C), // FireRed/LeafGreen
+            _ => (0x0690, 0x0790),          // Emerald
+        },
+        Pocket::Key => match game_code {
+            0x00000000 => (0x05B0, 0x0600), // Ruby/Sapphire
+            0x00000001 => (0x03B8, 0x0430), // FireRed/LeafGreen
+            _ => (0x05D8, 0x0650),          // Emerald
+        },
+    }
 }
 
 impl SaveFile {
@@ -274,228 +316,37 @@ impl SaveFile {
         LittleEndian::read_u16(&self.security_key().to_le_bytes()[..2])
     }
 
-    /// Retrieves the item pocket data from the save file.
+    /// Retrieves the pocket data from the save file.
     ///
-    /// The item pocket contains standard items such as potions, healing items, and battle items.
     /// Offsets and data encryption vary depending on the game version.
+    pub fn pocket(&self, pocket: Pocket) -> Result<Vec<(String, u16)>, SaveDataError> {
+        let game_code = self.game_code();
+        let (start, end) = pocket_address(pocket, game_code);
+        self.read_pocket(start, end)
+    }
+
+    /// Saves the updated pocket data back into the save file.
     ///
-    /// # Returns
-    /// A vector of tuples where each tuple contains the item name and its quantity.
-    pub fn item_pocket(&self) -> Result<Vec<(String, u16)>, SaveDataError> {
-        let game_code = self.game_code();
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x0560, 0x05B0), // Ruby/Sapphire
-            0x00000001 => (0x0310, 0x03B8), // FireRed/LeafGreen
-            _ => (0x0560, 0x05D8),          // Emerald
-        };
-
-        self.get_pocket(start, end)
-    }
-
-    pub fn ball_pocket(&self) -> Result<Vec<(String, u16)>, SaveDataError> {
-        let game_code = self.game_code();
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x0600, 0x0640), // Ruby/Sapphire
-            0x00000001 => (0x0430, 0x0464), // FireRed/LeafGreen
-            _ => (0x0650, 0x0690),          // Emerald
-        };
-
-        self.get_pocket(start, end)
-    }
-
-    pub fn berry_pocket(&self) -> Result<Vec<(String, u16)>, SaveDataError> {
-        let game_code = self.game_code();
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x0740, 0x7F8), // Ruby/Sapphire
-            0x00000001 => (0x054C, 0x5F8), // FireRed/LeafGreen
-            _ => (0x0790, 0x848),          // Emerald
-        };
-
-        self.get_pocket(start, end)
-    }
-
-    pub fn tm_pocket(&self) -> Result<Vec<(String, u16)>, SaveDataError> {
-        let game_code = self.game_code();
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x0640, 0x0740), // Ruby/Sapphire
-            0x00000001 => (0x0464, 0x054C), // FireRed/LeafGreen
-            _ => (0x0690, 0x0790),          // Emerald
-        };
-
-        self.get_pocket(start, end)
-    }
-
-    pub fn key_pocket(&self) -> Result<Vec<(String, u16)>, SaveDataError> {
-        let game_code = self.game_code();
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x05B0, 0x0600), // Ruby/Sapphire
-            0x00000001 => (0x03B8, 0x0430), // FireRed/LeafGreen
-            _ => (0x05D8, 0x0650),          // Emerald
-        };
-
-        self.get_pocket(start, end)
-    }
-
-    /// Saves the updated item pocket data back into the save file.
-    ///
-    /// This function writes the modified item pocket data into the corresponding save section,
+    /// This function writes the modified pocket data into the corresponding save section,
     /// encrypting it with the security key.
-    pub fn save_item_pocket(&mut self, pocket: Vec<(String, u16)>) -> Result<(), SaveDataError> {
+    pub fn save_pocket(&mut self, pocket_type: Pocket, pocket_list: Vec<(String, u16)>) -> Result<(), SaveDataError> {
         let game_code = self.game_code();
         let security_key = self.security_key_lower();
+        let (start, end) = pocket_address(pocket_type, game_code);
 
         let section = self
             .get_section(SectionID::TeamItems)
             .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
         let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
 
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x0560, 0x05B0), // Ruby/Sapphire
-            0x00000001 => (0x0310, 0x03B8), // FireRed/LeafGreen
-            _ => (0x0560, 0x05D8),          // Emerald
-        };
-
-        let encrypted_bag = SaveFile::encrypt_pocket(pocket, security_key)?;
+        let encrypted_bag = SaveFile::encrypt_pocket(pocket_list, security_key)?;
         section_data_buffer[start..end].copy_from_slice(&encrypted_bag);
         section.write_checksum(&mut self.data)?;
 
         Ok(())
     }
 
-    pub fn save_ball_pocket(&mut self, pocket: Vec<(String, u16)>) -> Result<(), SaveDataError> {
-        let game_code = self.game_code();
-        let security_key = self.security_key_lower();
-
-        let section = self
-            .get_section(SectionID::TeamItems)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
-        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x0600, 0x0640), // Ruby/Sapphire
-            0x00000001 => (0x0430, 0x0464), // FireRed/LeafGreen
-            _ => (0x0650, 0x0690),          // Emerald
-        };
-
-        let encrypted_bag = SaveFile::encrypt_pocket(pocket, security_key)?;
-        section_data_buffer[start..end].copy_from_slice(&encrypted_bag);
-        section.write_checksum(&mut self.data)?;
-
-        Ok(())
-    }
-
-    pub fn save_berry_pocket(&mut self, pocket: Vec<(String, u16)>) -> Result<(), SaveDataError> {
-        let game_code = self.game_code();
-        let security_key = self.security_key_lower();
-
-        let section = self
-            .get_section(SectionID::TeamItems)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
-        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x0740, 0x7F8), // Ruby/Sapphire
-            0x00000001 => (0x054C, 0x5F8), // FireRed/LeafGreen
-            _ => (0x0790, 0x848),          // Emerald
-        };
-
-        let encrypted_bag = SaveFile::encrypt_pocket(pocket, security_key)?;
-        section_data_buffer[start..end].copy_from_slice(&encrypted_bag);
-        section.write_checksum(&mut self.data)?;
-
-        Ok(())
-    }
-
-    pub fn save_tm_pocket(&mut self, pocket: Vec<(String, u16)>) -> Result<(), SaveDataError> {
-        let game_code = self.game_code();
-        let security_key = self.security_key_lower();
-
-        let section = self
-            .get_section(SectionID::TeamItems)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
-        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x0640, 0x0740), // Ruby/Sapphire
-            0x00000001 => (0x0464, 0x054C), // FireRed/LeafGreen
-            _ => (0x0690, 0x0790),          // Emerald
-        };
-
-        let encrypted_bag = SaveFile::encrypt_pocket(pocket, security_key)?;
-        section_data_buffer[start..end].copy_from_slice(&encrypted_bag);
-        section.write_checksum(&mut self.data)?;
-
-        Ok(())
-    }
-
-    pub fn save_key_pocket(&mut self, pocket: Vec<(String, u16)>) -> Result<(), SaveDataError> {
-        let game_code = self.game_code();
-        let security_key = self.security_key_lower();
-
-        let section = self
-            .get_section(SectionID::TeamItems)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
-        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
-
-        // For Ruby and Sapphire, this value will be 0x00000000.
-        // For FireRed and LeafGreen, this value will be 0x00000001.
-        // For Emerald any value other than 0 or 1 can be used.
-        // Determine offsets dynamically based on game version
-        let (start, end) = match game_code {
-            0x00000000 => (0x05B0, 0x0600), // Ruby/Sapphire
-            0x00000001 => (0x03B8, 0x0430), // FireRed/LeafGreen
-            _ => (0x05D8, 0x0650),          // Emerald
-        };
-
-        let encrypted_bag = SaveFile::encrypt_pocket(pocket, security_key)?;
-        section_data_buffer[start..end].copy_from_slice(&encrypted_bag);
-        section.write_checksum(&mut self.data)?;
-
-        Ok(())
-    }
-
-    fn get_pocket(&self, start: usize, end: usize) -> Result<Vec<(String, u16)>, SaveDataError> {
+    fn read_pocket(&self, start: usize, end: usize) -> Result<Vec<(String, u16)>, SaveDataError> {
         let security_key = self.security_key_lower();
 
         let section = self
@@ -712,7 +563,7 @@ impl Section {
 /// Representation of the PC Buffer.
 ///
 /// In Pokémon Generation III games, the save file is broken into two save blocks (Save A and Save B), each consisting of 14 sections. The PC Buffer spans multiple sections and contains the stored Pokémon data.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct PCBuffer {
     /// The sections that collectively store the PC data.
     buffer: [Section; 9],

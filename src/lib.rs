@@ -50,3 +50,5 @@ pub use crate::data_structure::pokemon::Evolution;
 pub use crate::data_structure::save_data::SaveFile;
 #[doc(hidden)]
 pub use crate::data_structure::save_data::StorageType;
+#[doc(hidden)]
+pub use crate::data_structure::save_data::Pocket;
