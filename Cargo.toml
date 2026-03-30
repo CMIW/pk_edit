@@ -1,12 +1,13 @@
 [package]
 name = "pk_edit"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 byteorder = "1.5.0"
+tracing = "0.1"
 lcg-rand = "1.0.0"
 rand = "0.8.5"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
@@ -14,3 +15,39 @@ serde = { version = "1.0.204", features = ["derive"] }
 serde_json = {version = "1.0.116", features = ["std"] }
 thiserror = "1.0.58"
 anyhow = "1.0"
+modular-bitfield = "0.13.0"
+
+[lints.rust]
+unsafe_code = "deny" # Only if you don't need unsafe
+missing_debug_implementations = "deny"
+#missing_docs = "warn"
+#rust_2018_idioms = "warn"
+
+[lints.clippy]
+# Safety & Error Handling
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unreachable = "deny"
+
+# Correctness & Robustness
+indexing_slicing = "deny"
+float_arithmetic = "deny" # If precision is critical (optional)
+cast_possible_truncation = "deny"
+cast_precision_loss = "deny"
+match_wild_err_arm = "deny"
+
+# Performance
+large_futures = "warn"
+large_stack_arrays = "warn"
+redundant_clone = "deny"
+
+# Style & Clarity
+wildcard_enum_match_arm = "deny"
+unneeded_field_pattern = "deny"
+fn_params_excessive_bools = "deny"
+must_use_candidate = "deny"
+doc_markdown = "warn"
+missing_panics_doc = "deny"
+missing_errors_doc = "deny"

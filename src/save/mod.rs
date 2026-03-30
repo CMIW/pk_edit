@@ -59,109 +59,44 @@
 //!| 12 | 3968 |  PC buffer A   |
 //!| 13 | 2000 |  PC buffer A   |
 //!
-use byteorder::{ByteOrder, LittleEndian};
-use std::convert::From;
-use std::default::Default;
-use thiserror::Error;
 
-use crate::data_structure::pokemon::Pokemon;
+// src/save/mod.rs
+use crate::common::character_set::{get_char, get_code};
+use crate::error::{PokemonError, SaveDataError};
 use crate::misc::{find_item, item_id_g3};
+use crate::pokemon::{Gender, Pokemon};
+use crate::save::storage::{pocket_address, PARTY_COUNT_OFFSET, PARTY_SIZE};
+use crate::save::trainer::{TimePlayed, TrainerID};
+use byteorder::{ByteOrder, LittleEndian};
 
-/// Represents errors that can occur while handling save data.
-#[derive(Error, Debug)]
-pub enum SaveDataError {
-    /// Section not found by ID
-    #[error("Section not found for ID {0:?}")]
-    SectionNotFound(SectionID),
+// --- Sub-Modules ---
+pub mod pc;
+pub mod section;
+pub mod storage;
+pub mod trainer;
 
-    /// Invalid data length encountered
-    #[error("Invalid data length: expected {expected}, found {found}")]
-    InvalidDataLength { expected: usize, found: usize },
+use self::pc::PCBuffer;
+use self::section::Section;
+pub use self::section::SectionID;
+use self::storage::{Pocket, StorageType, TEAM_SECTION_ID};
+use self::trainer::{GameVersion, GymBadges, Trainer};
 
-    /// Invalid offset or out-of-bounds access
-    #[error("Invalid offset: {0}")]
-    InvalidOffset(usize),
-
-    /// Decryption failure
-    #[error("Decryption failed for key {0:#X}")]
-    DecryptionError(u16),
-
-    /// Checksum mismatch detected
-    #[error("Checksum mismatch: expected {expected:#X}, found {found:#X}")]
-    ChecksumMismatch { expected: u16, found: u16 },
-
-    /// Unexpected error occurred
-    #[error("Unexpected error: {0}")]
-    Unexpected(String),
-}
-
-//const SIGNATURE_MAGIC_NUMBER: usize = 0x08012025;
+// --- Constants ---
 const NUMBER_GAME_SAVE_SECTIONS: usize = 14;
 const SECTION_SIZE: usize = 0x1000; // 4096 bytes
-const SECTION_DATA_SIZE: usize = 0x0FF4;
-const PC_BUFFER_SECTION_SIZE: usize = 0xF80; // 3968 bytes
-const PC_BUFFER_I_SECTION_SIZE: usize = 0x7D0; // 2000 bytes
-
 const GAME_SAVE_A_OFFSET: usize = 0x000000;
-//const GAME_SAVE_A_SIZE: usize = 57344;
-
 const GAME_SAVE_B_OFFSET: usize = 0x00E000;
-//const GAME_SAVE_B_SIZE: usize = 57344;
-
-//const HALL_FAME_OFFSET: usize = 0x01C000;
-//const HALL_FAME_SIZE: usize = 8192;
 
 /// Representation of the Save File.
 ///
-/// The Generation III save file is broken up into two game save blocks (Game Save A, Game Save B), each of which is broken up into 14 4KB sections.
+/// The Generation III save file is broken up into two game save blocks (Game Save A, Game Save B),
+/// each of which is broken up into 14 4KB sections.
 #[derive(Default, Debug, Clone)]
 pub struct SaveFile {
     game_save_a: [Section; NUMBER_GAME_SAVE_SECTIONS],
     game_save_b: [Section; NUMBER_GAME_SAVE_SECTIONS],
-    data: Vec<u8>,
+    pub data: Vec<u8>,
     pc_buffer: PCBuffer,
-}
-
-pub enum Pocket {
-    Items,
-    Pokeballs,
-    Berries,
-    Tms,
-    Key,
-}
-
-fn pocket_address(pocket: Pocket, game_code: u32) -> (usize, usize) {
-    // For Ruby and Sapphire, this value will be 0x00000000.
-    // For FireRed and LeafGreen, this value will be 0x00000001.
-    // For Emerald any value other than 0 or 1 can be used.
-    // Determine offsets dynamically based on game version
-    match pocket {
-        Pocket::Items => match game_code {
-            0x00000000 => (0x0560, 0x05B0), // Ruby/Sapphire
-            0x00000001 => (0x0310, 0x03B8), // FireRed/LeafGreen
-            _ => (0x0560, 0x05D8),          // Emerald
-        },
-        Pocket::Pokeballs => match game_code {
-            0x00000000 => (0x0600, 0x0640), // Ruby/Sapphire
-            0x00000001 => (0x0430, 0x0464), // FireRed/LeafGreen
-            _ => (0x0650, 0x0690),          // Emerald
-        },
-        Pocket::Berries => match game_code {
-            0x00000000 => (0x0740, 0x7F8), // Ruby/Sapphire
-            0x00000001 => (0x054C, 0x5F8), // FireRed/LeafGreen
-            _ => (0x0790, 0x848),          // Emerald
-        },
-        Pocket::Tms => match game_code {
-            0x00000000 => (0x0640, 0x0740), // Ruby/Sapphire
-            0x00000001 => (0x0464, 0x054C), // FireRed/LeafGreen
-            _ => (0x0690, 0x0790),          // Emerald
-        },
-        Pocket::Key => match game_code {
-            0x00000000 => (0x05B0, 0x0600), // Ruby/Sapphire
-            0x00000001 => (0x03B8, 0x0430), // FireRed/LeafGreen
-            _ => (0x05D8, 0x0650),          // Emerald
-        },
-    }
 }
 
 impl SaveFile {
@@ -232,13 +167,13 @@ impl SaveFile {
         if game_code == 0x00000001 {
             for (i, pokemon_data) in section_data_buffer[0x0038..0x0290].chunks(100).enumerate() {
                 let offset = section.offset() + 0x0038 + (i * 100);
-                let pokemon = Pokemon::new(offset, pokemon_data);
+                let pokemon = Pokemon::from_bytes(offset, pokemon_data)?;
                 team.push(pokemon);
             }
         } else {
             for (i, pokemon_data) in section_data_buffer[0x0238..0x0490].chunks(100).enumerate() {
                 let offset = section.offset() + 0x0238 + (i * 100);
-                let pokemon = Pokemon::new(offset, pokemon_data);
+                let pokemon = Pokemon::from_bytes(offset, pokemon_data)?;
                 team.push(pokemon);
             }
         }
@@ -246,12 +181,50 @@ impl SaveFile {
         Ok(team)
     }
 
-    pub fn pc_box(&self, number: usize) -> Vec<Pokemon> {
+    pub fn pc_box(&self, number: usize) -> Result<Vec<Pokemon>, PokemonError> {
         self.pc_buffer.pc_box(number)
     }
 
     pub fn is_pc_empty(&self) -> bool {
         self.pc_buffer.is_empty()
+    }
+
+    /// Sets a Pokémon at a specific PC location.
+    /// Overwrites whatever was there. Use this for injecting new Pokémon.
+    pub fn set_pc_pokemon(
+        &mut self,
+        box_idx: usize,
+        slot_idx: usize,
+        pokemon: &Pokemon,
+    ) -> Result<(), SaveDataError> {
+        // We only take the first 80 bytes (Persistent Data)
+        let bytes = pokemon.to_bytes();
+        self.pc_buffer
+            .write_raw_slot(box_idx, slot_idx, &bytes[..80], &mut self.data)
+    }
+
+    pub fn swap_pokemon(
+        &mut self,
+        mut from: Pokemon,
+        from_storage: StorageType,
+        mut to: Pokemon,
+        to_storage: StorageType,
+    ) -> Result<(), SaveDataError> {
+        std::mem::swap(&mut from.offset, &mut to.offset);
+        self.save_pokemon(to_storage, from)?;
+        self.save_pokemon(from_storage, to)?;
+        Ok(())
+    }
+
+    /// Deletes a Pokémon by overwriting it with zeros.
+    pub fn delete_pc_pokemon(
+        &mut self,
+        box_idx: usize,
+        slot_idx: usize,
+    ) -> Result<(), SaveDataError> {
+        let empty_data = [0u8; 80];
+        self.pc_buffer
+            .write_raw_slot(box_idx, slot_idx, &empty_data, &mut self.data)
     }
 
     pub fn save_pokemon(
@@ -261,9 +234,9 @@ impl SaveFile {
     ) -> Result<(), SaveDataError> {
         match storage {
             StorageType::Party => {
-                let offset = pokemon.offset();
+                let offset = pokemon.offset;
 
-                self.data[offset..offset + 100].copy_from_slice(&pokemon.raw_data());
+                self.data[offset..offset + 100].copy_from_slice(&pokemon.to_bytes());
                 let section = self
                     .get_section(SectionID::TeamItems)
                     .expect("Expected value but found None");
@@ -329,7 +302,11 @@ impl SaveFile {
     ///
     /// This function writes the modified pocket data into the corresponding save section,
     /// encrypting it with the security key.
-    pub fn save_pocket(&mut self, pocket_type: Pocket, pocket_list: Vec<(String, u16)>) -> Result<(), SaveDataError> {
+    pub fn save_pocket(
+        &mut self,
+        pocket_type: Pocket,
+        pocket_list: Vec<(String, u16)>,
+    ) -> Result<(), SaveDataError> {
         let game_code = self.game_code();
         let security_key = self.security_key_lower();
         let (start, end) = pocket_address(pocket_type, game_code);
@@ -379,7 +356,7 @@ impl SaveFile {
             let encrypted_quantity = LittleEndian::read_u16(&chunk[2..4]);
             let quantity = encrypted_quantity ^ security_key;
 
-            let item_name = find_item(item_id as usize).unwrap_or_else(|_| "Unknown".to_string());
+            let item_name = find_item(item_id as usize).unwrap_or_else(|_| "Nothing".to_string());
             pocket.push((item_name, quantity));
         }
 
@@ -489,259 +466,224 @@ impl SaveFile {
             .find(|section| section.id(&self.data) == id)
             .copied()
     }
-}
 
-/// The Pokémon save file is divided into 14 sections, each corresponding to a specific aspect of the game.
-/// These sections include Trainer Info, Items, PC Box Data, etc.
-///
-/// This struct provides methods for accessing and modifying the save file's sections, managing checksums,
-/// and ensuring data integrity.
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Default)]
-struct Section {
-    offset: usize,
-    size: usize,
-}
+    /// Retrieves the high-level Trainer data (Name, ID, Money, Time, etc.)
+    pub fn trainer(&self) -> Result<Trainer, SaveDataError> {
+        let game_code = self.game_code();
+        let version = match game_code {
+            0 => GameVersion::RubySapphire,
+            1 => GameVersion::FireRedLeafGreen,
+            _ => GameVersion::Emerald,
+        };
 
-impl Section {
-    /// Retrieves the save index for this section.
-    /// Every time the game is saved, its Save Index value goes up by one. This is true even when starting a new game: it continues to count up from the previous save. All 14 sections within a game save must have the same Save Index value. The most recent game save will have a greater Save Index value than the previous save.
-    fn save_index(&self, buffer: &[u8]) -> u32 {
-        let section_buffer = &buffer[self.offset..self.offset + self.size];
-        LittleEndian::read_u32(&section_buffer[0x0FFC..])
+        let section0 = self
+            .get_section(SectionID::TrainerInfo)
+            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
+        let data0 = section0.data(&self.data);
+
+        // Name (0x00 - 0x07)
+        let name_bytes = &data0[0x00..0x08]; // 7 chars + terminator
+        let name = name_bytes
+            .iter()
+            .take_while(|&&c| c != 0xFF)
+            .map(|&c| get_char(c as usize))
+            .collect::<String>();
+
+        // Gender (0x08)
+        let gender = if data0[0x08] == 1 {
+            Gender::F
+        } else {
+            Gender::M
+        };
+
+        // ID (0x0A - 0x0E)
+        let mut id_bytes = [0u8; 4];
+        id_bytes.copy_from_slice(&data0[0x0A..0x0E]);
+        let id = TrainerID::from(id_bytes);
+
+        // Time Played (0x0E - 0x13)
+        let time_played = TimePlayed::from_bytes(&data0[0x0E..0x13]);
+
+        let section1 = self
+            .get_section(SectionID::TeamItems)
+            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
+        let data1 = section1.data(&self.data);
+
+        // Money Offset: FRLG = 0x0290, Others = 0x0490
+        let money_offset = if game_code == 1 { 0x0290 } else { 0x0490 };
+
+        let encrypted_money = LittleEndian::read_u32(&data1[money_offset..money_offset + 4]);
+        let money = encrypted_money ^ self.security_key();
+
+        Ok(Trainer {
+            name,
+            gender,
+            id,
+            time_played,
+            money,
+            game_version: version,
+            security_key: self.security_key(),
+        })
     }
 
-    /// Retrieves the section ID, which identifies the section's purpose (e.g., Trainer Info, PC Buffer A).
-    fn id(&self, buffer: &[u8]) -> SectionID {
-        let section_buffer = &buffer[self.offset..self.offset + self.size];
-        let id = LittleEndian::read_u16(&section_buffer[0x0FF4..0x0FF6]);
-        id.into()
-    }
+    /// Saves the modified Trainer struct back to the file.
+    /// Updates both Section 0 (Info) and Section 1 (Money).
+    pub fn save_trainer(&mut self, trainer: &Trainer) -> Result<(), SaveDataError> {
+        let game_code = self.game_code();
 
-    /// Reads the data of the section.
-    fn data<'a>(&'a self, buffer: &'a [u8]) -> &'a [u8] {
-        let section_buffer = &buffer[self.offset..self.offset + self.size];
-        &section_buffer[0..SECTION_DATA_SIZE]
-    }
+        let section0 = self
+            .get_section(SectionID::TrainerInfo)
+            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
+        let data0 = section0.data_mut(&mut self.data);
 
-    /// Retrieves mutable data of the section.
-    fn data_mut<'a>(&'a self, buffer: &'a mut [u8]) -> &'a mut [u8] {
-        let section_buffer = &mut buffer[self.offset..self.offset + self.size];
-        &mut section_buffer[0..SECTION_DATA_SIZE]
-    }
-
-    fn offset(&self) -> usize {
-        self.offset
-    }
-
-    /// Updates the checksum of the section to reflect changes in the data.
-    /// Used to validate the integrity of saved data.
-    /// A 16-bit checksum generated by adding up bytes from the section. The algorithm is as follows:
-    /// -Initialize a 32-bit checksum variable to zero.
-    /// -Read 4 bytes at a time as 32-bit word (little-endian) and add it to the variable.
-    /// -Take the upper 16 bits of the result, and add them to the lower 16 bits of the result.
-    /// -This new 16-bit value is the checksum.
-    fn write_checksum(&self, buffer: &mut [u8]) -> Result<(), SaveDataError> {
-        let mut checksum: u32 = 0;
-        let data = self.data(buffer);
-
-        for chunk in data.chunks(4) {
-            let (sum, _) = checksum.overflowing_add(LittleEndian::read_u32(chunk));
-            checksum = sum;
+        // Name
+        let encoded_name: Vec<u8> = trainer
+            .name
+            .chars()
+            .map(|c| get_code(&c.to_string()))
+            .collect();
+        // Pad with 0xFF (Terminator) then 0x00
+        let mut final_name = [0x00u8; 8];
+        for (i, &b) in encoded_name.iter().take(7).enumerate() {
+            final_name[i] = b;
         }
-
-        // sum opper and lower bits
-        let (checksum, _) = ((checksum & 0xFFFF) as u16).overflowing_add((checksum >> 16) as u16);
-
-        let section_buffer = &mut buffer[self.offset..self.offset + self.size];
-
-        section_buffer[0x0FF6..0x0FF8].copy_from_slice(&checksum.to_le_bytes());
-
-        Ok(())
-    }
-}
-
-/// Representation of the PC Buffer.
-///
-/// In Pokémon Generation III games, the save file is broken into two save blocks (Save A and Save B), each consisting of 14 sections. The PC Buffer spans multiple sections and contains the stored Pokémon data.
-#[derive(Default, Debug, Clone)]
-pub struct PCBuffer {
-    /// The sections that collectively store the PC data.
-    buffer: [Section; 9],
-    /// The combined data extracted from the sections for easier processing.
-    data: Vec<u8>,
-}
-
-impl PCBuffer {
-    /// Creates a new PCBuffer by combining data from the specified sections.
-    /// The PCBuffer is constructed by extracting data from the sections that contain the PC data.
-    /// Special handling is required for the last section (`PCbufferI`), which may have a different size.
-    fn new(buffer: [Section; 9], data_buffer: &[u8]) -> Self {
-        let mut data: Vec<u8> = vec![];
-
-        // deconstruct the pc data from the the pc buffers
-        for section in buffer {
-            if section.id(data_buffer) == SectionID::PCbufferI {
-                data.extend_from_slice(
-                    &data_buffer[section.offset..section.offset + PC_BUFFER_I_SECTION_SIZE],
-                );
-            } else {
-                data.extend_from_slice(
-                    &data_buffer[section.offset..section.offset + PC_BUFFER_SECTION_SIZE],
-                );
-            }
+        if encoded_name.len() < 7 {
+            *final_name
+                .get_mut(encoded_name.len())
+                .ok_or(SaveDataError::InvalidOffset(encoded_name.len()))? = 0x00;
         }
+        data0
+            .get_mut(0x00..0x08)
+            .ok_or(SaveDataError::InvalidRange(0x00..0x08))?
+            .copy_from_slice(&final_name);
 
-        PCBuffer { buffer, data }
-    }
+        // Gender
+        *data0
+            .get_mut(0x08)
+            .ok_or(SaveDataError::InvalidOffset(0x08))? =
+            if trainer.gender == Gender::F { 1 } else { 0 };
 
-    /// Retrieves all Pokémon stored in a specific PC box.
-    /// Each PC box is a fixed-size chunk of the PC Buffer, containing 30 Pokémon slots.
-    fn pc_box(&self, number: usize) -> Vec<Pokemon> {
-        let mut boxes = self.data[0x0004..0x8344].chunks(2400);
-        let pc = boxes.nth(number).expect("Expected value but found None");
-        let mut list: Vec<Pokemon> = vec![];
+        // ID
+        let id_bytes: Vec<u8> = trainer.id.into();
+        data0
+            .get_mut(0x0A..0x0E)
+            .ok_or(SaveDataError::InvalidRange(0x0A..0x0E))?
+            .copy_from_slice(&id_bytes);
 
-        for (i, pokemon) in pc.chunks(80).enumerate() {
-            // data_offset + pc box offset + slot offset
-            let offset = 0x0004 + (number * 2400) + (i * 80);
-            let pokemon = Pokemon::new(offset, pokemon);
-            list.push(pokemon);
-        }
+        // Time
+        data0
+            .get_mut(0x0E..0x13)
+            .ok_or(SaveDataError::InvalidRange(0x0E..0x13))?
+            .copy_from_slice(&trainer.time_played.to_bytes());
 
-        list
-    }
+        // Recalculate Section 0 Checksum
+        section0.write_checksum(&mut self.data)?;
 
-    /// Saves a Pokémon back into the PC Buffer and updates the relevant sections.
-    ///
-    /// # Arguments
-    /// - `pokemon`: The Pokémon to save.
-    /// - `buffer`: The save file data buffer to update.
-    fn save_pokemon(&mut self, pokemon: Pokemon, buffer: &mut [u8]) -> Result<(), SaveDataError> {
-        let offset = pokemon.offset();
-        self.data[offset..offset + 80].copy_from_slice(&pokemon.raw_data()[..80]);
+        let section1 = self
+            .get_section(SectionID::TeamItems)
+            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
 
-        // Update each section of the PC Buffer and recalculate checksums.
-        for (i, section) in self.data.chunks(PC_BUFFER_SECTION_SIZE).enumerate() {
-            if i == 8 {
-                buffer[self.buffer[i].offset..self.buffer[i].offset + PC_BUFFER_I_SECTION_SIZE]
-                    .copy_from_slice(section);
-            } else {
-                buffer[self.buffer[i].offset..self.buffer[i].offset + PC_BUFFER_SECTION_SIZE]
-                    .copy_from_slice(section);
-            }
+        // Need offset again
+        let money_offset = if game_code == 1 { 0x0290 } else { 0x0490 };
 
-            self.buffer[i].write_checksum(buffer)?;
-        }
+        // Encrypt Money
+        let encrypted_money = trainer.money ^ self.security_key();
+
+        // We need a mutable reference to data again, but we can't hold two mutable borrows of `self.data`
+        // So we re-acquire the slice for Section 1
+        let data1 = section1.data_mut(&mut self.data);
+        LittleEndian::write_u32(
+            data1
+                .get_mut(money_offset..money_offset + 4)
+                .ok_or(SaveDataError::InvalidOffset(money_offset))?,
+            encrypted_money,
+        );
+
+        // Recalculate Section 1 Checksum
+        section1.write_checksum(&mut self.data)?;
 
         Ok(())
     }
 
-    /// Checks if the PC Buffer is empty.
-    fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-}
+    /// Internal helper to find the badge byte offset within Section 0 (Trainer Info).
+    fn badge_offset(&self) -> Result<usize, SaveDataError> {
+        let game_code = self.game_code();
 
-/// Represents the player's internal Trainer ID.
-///
-/// The Trainer ID is split into two components:
-/// - The **public ID** (lower 16 bits), which is visible in-game.
-/// - The **private ID** (upper 16 bits), which is used internally for certain mechanics (e.g., shiny Pokémon).
-#[derive(Debug, Copy, Clone)]
-pub struct TrainerID {
-    public: u16,
-    private: u16,
-}
+        // The Badges are a single byte located in Section 0.
+        // Offsets vary significantly by version:
+        // 0 = Ruby/Sapphire
+        // 1 = FireRed/LeafGreen
+        // Others = Emerald
 
-impl From<[u8; 4]> for TrainerID {
-    fn from(buffer: [u8; 4]) -> Self {
-        // The lower 16 bits represent the visible, public ID.
-        // Since it's little endian the lower 16 bit are the first 2 bytes
-        TrainerID {
-            public: LittleEndian::read_u16(&buffer[..2]),
-            private: LittleEndian::read_u16(&buffer[2..]),
+        match game_code {
+            0 => Ok(0x0239), // Ruby/Sapphire
+            1 => Ok(0x02B3), // FireRed/LeafGreen
+            _ => Ok(0x0249), // Emerald
         }
     }
-}
 
-impl Into<Vec<u8>> for TrainerID {
-    fn into(self) -> Vec<u8> {
-        let buffer: Vec<u8> = vec![0, 0, 0, 0];
+    /// Retrieves the Gym Badges flags.
+    pub fn badges(&self) -> Result<GymBadges, SaveDataError> {
+        let offset = self.badge_offset()?;
 
-        buffer
-    }
-}
+        let section = self
+            .get_section(SectionID::TrainerInfo)
+            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
 
-/// Enum representing the ID of a save file section.
-/// Specifies the save data being represented
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Default)]
-pub enum SectionID {
-    #[default]
-    TrainerInfo,
-    TeamItems,
-    GameState,
-    MiscData,
-    RivalInfo,
-    PCbufferA,
-    PCbufferB,
-    PCbufferC,
-    PCbufferD,
-    PCbufferE,
-    PCbufferF,
-    PCbufferG,
-    PCbufferH,
-    PCbufferI,
-    NA,
-}
+        let data = section.data(&self.data);
 
-impl From<u16> for SectionID {
-    fn from(id: u16) -> Self {
-        match id {
-            0 => SectionID::TrainerInfo,
-            1 => SectionID::TeamItems,
-            2 => SectionID::GameState,
-            3 => SectionID::MiscData,
-            4 => SectionID::RivalInfo,
-            5 => SectionID::PCbufferA,
-            6 => SectionID::PCbufferB,
-            7 => SectionID::PCbufferC,
-            8 => SectionID::PCbufferD,
-            9 => SectionID::PCbufferE,
-            10 => SectionID::PCbufferF,
-            11 => SectionID::PCbufferG,
-            12 => SectionID::PCbufferH,
-            13 => SectionID::PCbufferI,
-            _ => SectionID::NA,
+        if offset >= data.len() {
+            return Err(SaveDataError::InvalidOffset(offset));
         }
-    }
-}
 
-impl From<SectionID> for i32 {
-    fn from(id: SectionID) -> Self {
-        match id {
-            SectionID::TrainerInfo => 0,
-            SectionID::TeamItems => 1,
-            SectionID::GameState => 2,
-            SectionID::MiscData => 3,
-            SectionID::RivalInfo => 4,
-            SectionID::PCbufferA => 5,
-            SectionID::PCbufferB => 6,
-            SectionID::PCbufferC => 7,
-            SectionID::PCbufferD => 8,
-            SectionID::PCbufferE => 9,
-            SectionID::PCbufferF => 10,
-            SectionID::PCbufferG => 11,
-            SectionID::PCbufferH => 12,
-            SectionID::PCbufferI => 13,
-            SectionID::NA => 14,
+        Ok(GymBadges::from_bytes([*data
+            .get(offset)
+            .ok_or(SaveDataError::InvalidOffset(offset))?]))
+    }
+
+    /// Writes the Gym Badges flags and updates the checksum.
+    pub fn set_badges(&mut self, badges: GymBadges) -> Result<(), SaveDataError> {
+        let offset = self.badge_offset()?;
+
+        let section = self
+            .get_section(SectionID::TrainerInfo)
+            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
+
+        // Mutable access to Section 0
+        let data = section.data_mut(&mut self.data);
+
+        if offset >= data.len() {
+            return Err(SaveDataError::InvalidOffset(offset));
         }
-    }
-}
 
-#[derive(Debug, Copy, Clone, Default)]
-pub enum StorageType {
-    PC,
-    Party,
-    #[default]
-    None,
+        let badges_data = data
+            .get_mut(offset)
+            .ok_or(SaveDataError::InvalidOffset(offset))?;
+
+        *badges_data = badges.into_bytes()[0];
+
+        // Update Checksum for Section 0
+        section.write_checksum(&mut self.data)?;
+
+        Ok(())
+    }
+
+    /// Reads the current number of Pokémon in the party.
+    pub fn get_party_count(&self) -> Result<usize, SaveDataError> {
+        let section = self
+            .get_section(TEAM_SECTION_ID)
+            .ok_or(SaveDataError::SectionNotFound(TEAM_SECTION_ID))?;
+        let data = section.data(&self.data);
+
+        let count = *data
+            .get(PARTY_COUNT_OFFSET)
+            .ok_or(SaveDataError::InvalidOffset(PARTY_COUNT_OFFSET))? as usize;
+        if count > PARTY_SIZE {
+            return Err(SaveDataError::InvalidDataLength {
+                expected: 6,
+                found: count,
+            });
+        }
+        Ok(count)
+    }
 }

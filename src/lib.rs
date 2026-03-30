@@ -37,18 +37,14 @@
 //! }
 //! ```
 //!
-pub mod data_structure;
+pub mod common;
+pub mod error;
 pub mod misc;
+pub mod pokemon;
+pub mod save;
 #[doc(hidden)]
 pub mod test;
 
-#[doc(hidden)]
-pub use crate::data_structure::pokemon::Pokemon;
-#[doc(hidden)]
-pub use crate::data_structure::pokemon::Evolution;
-#[doc(hidden)]
-pub use crate::data_structure::save_data::SaveFile;
-#[doc(hidden)]
-pub use crate::data_structure::save_data::StorageType;
-#[doc(hidden)]
-pub use crate::data_structure::save_data::Pocket;
+pub use misc::{items, moves, species};
+pub use pokemon::Pokemon;
+pub use save::SaveFile;

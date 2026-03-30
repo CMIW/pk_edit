@@ -1,8 +1,23 @@
+//! Game data constants and SQLite database helpers.
+//!
+//! This module exposes:
+//! - Compile-time constants for species IDs, gender thresholds, experience tables, natures,
+//!   and nature stat modifiers.
+//! - Functions that open the bundled `pk_edit.db` SQLite database and query Pokédex entries,
+//!   move data, item data, abilities, evolutions, and growth rates.
+//!
+//! The database is embedded in the binary via `include_bytes!` and must be extracted to the
+//! working directory with [`extract_db`] before any query functions can be used.
+
+use crate::pokemon::Evolution;
 use rusqlite::{Connection, Result};
 use std::fs::File;
 use std::io::Write;
-use crate::Evolution;
 
+/// Internal species ID table mapping Hoenn Pokédex indices (251+) to their Gen III species IDs.
+///
+/// Gen III uses a non-contiguous species numbering scheme. This table is used to convert between
+/// National Dex numbers above 251 and the internal species IDs stored in save files.
 pub const SPECIES: [u16; 136] = [
     412, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294,
     295, 296, 297, 298, 299, 300, 304, 305, 309, 310, 392, 393, 394, 311, 312, 306, 307, 364, 365,
@@ -14,6 +29,10 @@ pub const SPECIES: [u16; 136] = [
     406, 409, 410,
 ];
 
+/// Gender ratio thresholds used to determine a Pokémon's gender from its personality value.
+///
+/// Each entry is `(threshold, ratio_string)`. A Pokémon is female when `PID % 256 < threshold`.
+/// The special value 255 means genderless; 254 means always female.
 pub const GENDER_THRESHOLD: [(u32, &str); 8] = [
     (255, "Genderless"),
     (254, "0:100"),
@@ -25,6 +44,10 @@ pub const GENDER_THRESHOLD: [(u32, &str); 8] = [
     (0, "100:0"),
 ];
 
+/// Experience thresholds for each level (1–100) across all six growth rates.
+///
+/// Column indices: `[Erratic, Fast, MediumFast, MediumSlow, Slow, Fluctuating, Level]`.
+/// The last column (index 6) simply stores the level number for convenience.
 //  Erratic[0]  Fast[1] M Fast[2]   M Slow[3]   Slow[4] Fluctuating[5]  Level[6]
 pub const EXPERIENCE_TABLE: [[u32; 7]; 100] = [
     [0, 0, 0, 0, 0, 0, 1],
@@ -129,12 +152,17 @@ pub const EXPERIENCE_TABLE: [[u32; 7]; 100] = [
     [600000, 800000, 1000000, 1059860, 1250000, 1640000, 100],
 ];
 
+/// The 25 Pokémon natures, indexed by `PID % 25`.
 pub const NATURE: [&str; 25] = [
     "Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish", "Lax",
     "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet", "Bashful", "Rash",
     "Calm", "Gentle", "Sassy", "Careful", "Quirky",
 ];
 
+/// Stat multipliers for each of the 25 natures, indexed by `PID % 25`.
+///
+/// Column order: `[Attack, Defense, Speed, Sp. Attack, Sp. Defense]`.
+/// Neutral natures use `1.0` for all stats; boosted stats use `1.1` and hindered stats use `0.9`.
 // Attack[0] Defense[1] Speed[2] Sp Attack[3] Sp Defense[4]
 pub const NATURE_MODIFIER: [[f32; 5]; 25] = [
     [1.0, 1.0, 1.0, 1.0, 1.0],
@@ -166,12 +194,17 @@ pub const NATURE_MODIFIER: [[f32; 5]; 25] = [
 
 const DB: &[u8] = include_bytes!("../pk_edit.db");
 
+/// Extracts the bundled SQLite database to `./pk_edit.db` in the current working directory.
+///
+/// Uses [`File::create_new`] so it is a no-op if the file already exists (returns an error that
+/// the caller should ignore). Must be called before any database query function.
 pub fn extract_db() -> std::io::Result<()> {
     let mut f = File::create_new("./pk_edit.db")?;
     f.write_all(DB)?;
     Ok(())
 }
 
+/// Returns all items that can be held by a Pokémon in Gen III (excludes Key Items).
 pub fn held_items() -> Result<Vec<String>> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -192,6 +225,7 @@ pub fn held_items() -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Returns regular bag items (excludes Key Items, Pokéballs, Berries, and TMs/HMs).
 pub fn items() -> Result<Vec<String>> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -211,6 +245,7 @@ pub fn items() -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Returns all Pokéball names available in Gen III.
 pub fn balls() -> Result<Vec<String>> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -231,6 +266,27 @@ pub fn balls() -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Returns the item database IDs for all Pokéballs available in Gen III.
+pub fn balls_id() -> Result<Vec<u16>> {
+    let conn = Connection::open("pk_edit.db")?;
+
+    let mut stmt =
+        conn.prepare("SELECT id FROM Items WHERE id_g3 IS NOT NULL AND type == 'Pokeballs'")?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+
+    let mut res = Vec::new();
+    for result in rows {
+        res.push(result?);
+    }
+
+    stmt.finalize()?;
+
+    let _ = conn.close();
+
+    Ok(res)
+}
+
+/// Returns all Berry names available in Gen III.
 pub fn berries() -> Result<Vec<String>> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -251,6 +307,7 @@ pub fn berries() -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Returns all TM and HM names available in Gen III.
 pub fn tms() -> Result<Vec<String>> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -271,6 +328,7 @@ pub fn tms() -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Returns all Key Item names available in Gen III.
 pub fn key_items() -> Result<Vec<String>> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -291,6 +349,7 @@ pub fn key_items() -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Looks up an item's English name by its Gen III item ID (`id_g3` column).
 pub fn find_item(id_g3: usize) -> Result<String> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -305,6 +364,9 @@ pub fn find_item(id_g3: usize) -> Result<String> {
     res
 }
 
+/// Returns the canonical database `id` for an item by its English name.
+///
+/// Applies [`match_item_name`] normalisation before querying (e.g. `"Parlyz Heal"` → `"Paralyze Heal"`).
 pub fn item_id(name: &str) -> Result<usize> {
     let conn = Connection::open("pk_edit.db")?;
     let name = match_item_name(name);
@@ -318,6 +380,9 @@ pub fn item_id(name: &str) -> Result<usize> {
     res
 }
 
+/// Returns the Gen III-specific `id_g3` for an item by its English name.
+///
+/// This is the value stored in save file pocket data, distinct from the canonical `id`.
 pub fn item_id_g3(name: &str) -> Result<u16> {
     let conn = Connection::open("pk_edit.db")?;
     let name = match_item_name(name);
@@ -331,6 +396,7 @@ pub fn item_id_g3(name: &str) -> Result<u16> {
     res
 }
 
+/// Returns the National Pokédex number for a species by its English name (case-insensitive `LIKE`).
 pub fn nat_dex_num(species: &str) -> Result<u16> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -345,6 +411,7 @@ pub fn nat_dex_num(species: &str) -> Result<u16> {
     res
 }
 
+/// Returns the growth rate string (e.g. `"Medium Fast"`) for a species by National Dex number.
 pub fn growth_rate(dex_num: u16) -> Result<String> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -359,6 +426,7 @@ pub fn growth_rate(dex_num: u16) -> Result<String> {
     res
 }
 
+/// Returns the English species name for a given National Dex number.
 pub fn pk_species(dex_num: u16) -> Result<String> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -373,6 +441,7 @@ pub fn pk_species(dex_num: u16) -> Result<String> {
     res
 }
 
+/// Returns `(type_name, move_name, pp)` for a move by its database ID.
 pub fn move_data(id: usize) -> Result<(String, String, u8)> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -387,6 +456,8 @@ pub fn move_data(id: usize) -> Result<(String, String, u8)> {
     res
 }
 
+/// Returns `(primary_type, secondary_type)` for a species by National Dex number.
+/// The secondary type is `None` for single-type Pokémon.
 pub fn typing(dex_num: u16) -> Result<(String, Option<String>)> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -401,6 +472,7 @@ pub fn typing(dex_num: u16) -> Result<(String, Option<String>)> {
     res
 }
 
+/// Returns the gender ratio string (e.g. `"50:50"`) for a species by National Dex number.
 pub fn gender_ratio(dex_num: u16) -> Result<String> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -415,6 +487,7 @@ pub fn gender_ratio(dex_num: u16) -> Result<String> {
     res
 }
 
+/// Returns the primary ability name for a species by National Dex number.
 pub fn ability(dex_num: u16) -> Result<String> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -429,6 +502,7 @@ pub fn ability(dex_num: u16) -> Result<String> {
     res
 }
 
+/// Returns the secondary (hidden/alternate) ability name for a species by National Dex number.
 pub fn hidden_ability(dex_num: u16) -> Result<String> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -459,6 +533,7 @@ fn match_item_name(name: &str) -> &str {
     }
 }
 
+/// Returns the English names of all 386 Gen III species, ordered by National Dex number.
 pub fn species() -> Result<Vec<String>> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -477,6 +552,7 @@ pub fn species() -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Returns the English names of all moves that exist in Gen III, ordered by ID.
 pub fn moves() -> Result<Vec<String>> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -495,6 +571,7 @@ pub fn moves() -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Returns `(move_id, pp)` for a move by its English name.
 pub fn find_move(name: &str) -> Result<(u16, u8)> {
     let conn = Connection::open("pk_edit.db")?;
 
@@ -509,13 +586,23 @@ pub fn find_move(name: &str) -> Result<(u16, u8)> {
     res
 }
 
+/// Returns `(hp, attack, defense, sp_attack, sp_defense, speed)` base stats for a species.
 pub fn base_stats(dex_num: &u16) -> Result<(u16, u16, u16, u16, u16, u16)> {
     let conn = Connection::open("pk_edit.db")?;
 
     let res = conn.query_row(
         "SELECT hp, attack, defense, sp_attack, sp_defense, speed FROM Pokedex WHERE dex_num = ?1",
         [dex_num],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
     );
 
     let _ = conn.close();
@@ -523,6 +610,7 @@ pub fn base_stats(dex_num: &u16) -> Result<(u16, u16, u16, u16, u16, u16)> {
     res
 }
 
+/// Returns the serialised [`Evolution`] data for a species by National Dex number.
 pub fn evolution(dex_num: &u16) -> anyhow::Result<Evolution, anyhow::Error> {
     let conn = Connection::open("pk_edit.db")?;
 
