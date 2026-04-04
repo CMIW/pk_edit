@@ -7,12 +7,12 @@
 //! Pocket data in save files is XOR-encrypted with the lower 16 bits of the security key.
 //! [`decrypt_pocket`] and [`encrypt_pocket`] handle the conversion to/from `(name, quantity)` pairs.
 
-use crate::save::SectionID;
+use crate::gen3::save::section::SectionID;
 use byteorder::{ByteOrder, LittleEndian};
 use std::fmt;
 
 use crate::error::SaveDataError;
-use crate::misc::{find_item, item_id_g3};
+use rusqlite::Connection;
 
 pub const TEAM_SECTION_ID: SectionID = SectionID::TeamItems;
 pub const PARTY_COUNT_OFFSET: usize = 0x0034;
@@ -93,14 +93,12 @@ pub fn pocket_address(pocket: Pocket, game_code: u32) -> (usize, usize) {
 }
 
 /// Decrypts pocket data using the security key.
-/// Returns a list of (ItemName, Quantity).
+/// Returns a list of (ItemName, Quantity) for every slot, including empty ones as ("Nothing", 0).
 pub fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<(String, u16)>, SaveDataError> {
     let mut pocket = Vec::new();
 
     for chunk in data.chunks(4) {
         if chunk.len() < 4 {
-            // If padding bytes remain that aren't a full chunk, ignore or error?
-            // Usually pockets are aligned to 4 bytes.
             if chunk.iter().all(|&x| x == 0) {
                 continue;
             }
@@ -113,14 +111,23 @@ pub fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<(String, u16
         let item_id = LittleEndian::read_u16(&chunk[0..2]);
         let encrypted_quantity = LittleEndian::read_u16(&chunk[2..4]);
 
-        // Apply Security Key (XOR)
         let quantity = encrypted_quantity ^ security_key;
 
         if item_id != 0 {
-            // Safe DB lookup
-            let item_name = find_item(item_id as usize)
-                .unwrap_or_else(|_| format!("Unknown Item ({})", item_id));
+            let item_name = Connection::open("pk_edit.db")
+                .ok()
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT name_en FROM items WHERE id_in_game = ?1 AND game_family = 'gen3'",
+                        [item_id as usize],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                })
+                .unwrap_or_else(|| format!("Unknown Item ({})", item_id));
             pocket.push((item_name, quantity));
+        } else {
+            pocket.push((String::from("Nothing"), 0));
         }
     }
 
@@ -129,6 +136,7 @@ pub fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<(String, u16
 
 /// Encrypts pocket data using the security key for saving.
 /// Returns raw bytes ready to be written to Section 1.
+/// "Nothing" entries are written as item_id=0 with quantity=0.
 pub fn encrypt_pocket(
     pocket: Vec<(String, u16)>,
     security_key: u16,
@@ -136,9 +144,23 @@ pub fn encrypt_pocket(
     let mut encrypted_data = Vec::new();
 
     for (item_name, quantity) in pocket {
-        // Strict or Safe DB lookup?
-        // Usually strict for writing, but we default to 0 if not found to prevent crashing logic loops
-        let item_id = item_id_g3(&item_name).unwrap_or(0);
+        if item_name == "Nothing" {
+            encrypted_data.extend(&0u16.to_le_bytes());
+            encrypted_data.extend(&0u16.to_le_bytes());
+            continue;
+        }
+
+        let item_id: u16 = Connection::open("pk_edit.db")
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    "SELECT id_in_game FROM items WHERE name_en = ?1 AND game_family = 'gen3'",
+                    [item_name.as_str()],
+                    |row| row.get::<_, u16>(0),
+                )
+                .ok()
+            })
+            .unwrap_or(0);
 
         let encrypted_quantity = quantity ^ security_key;
 

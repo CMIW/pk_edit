@@ -3,4 +3,5 @@
 //! Currently contains [`character_set`], which provides bidirectional conversion between
 //! the Gen III custom 256-character encoding and Unicode.
 
-pub mod character_set;
+pub mod charset;
+pub mod types;

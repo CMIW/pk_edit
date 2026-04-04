@@ -1,14 +1,25 @@
 //! Error types for the `pk_edit` library.
 //!
-//! Two error enumerations are provided:
-//! - [`PokemonError`] for failures when parsing or mutating a [`crate::pokemon::Pokemon`].
-//! - [`SaveDataError`] for failures when reading or writing the [`crate::save::SaveFile`].
+//! Three error enumerations are provided:
+//! - [`DetectError`] for failures when detecting a save file's generation.
+//! - [`PokemonError`] for failures when parsing or mutating a Pokémon.
+//! - [`SaveDataError`] for failures when reading or writing a save file.
 
-use crate::save::SectionID;
 use std::ops::Range;
 use thiserror::Error;
 
-/// Errors that can occur while parsing or mutating a [`crate::pokemon::Pokemon`].
+/// Errors that can occur when detecting a save file's generation from raw bytes.
+#[derive(Error, Debug)]
+pub enum DetectError {
+    /// The buffer is smaller than the minimum supported save size.
+    #[error("File too small: {0} bytes")]
+    TooSmall(usize),
+    /// No supported format matched the file size or magic bytes.
+    #[error("Unknown save format (size {0} bytes)")]
+    UnknownFormat(usize),
+}
+
+/// Errors that can occur while parsing or mutating a Pokémon.
 #[derive(Error, Debug)]
 pub enum PokemonError {
     /// The byte slice passed to `Pokemon::from_bytes` was shorter than 80 bytes.
@@ -39,7 +50,7 @@ pub enum PokemonError {
 pub enum SaveDataError {
     /// Section not found by ID
     #[error("Section not found for ID {0:?}")]
-    SectionNotFound(SectionID),
+    SectionNotFound(String),
 
     /// Invalid data length encountered
     #[error("Invalid data length: expected {expected}, found {found}")]

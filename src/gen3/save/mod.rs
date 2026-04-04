@@ -61,12 +61,15 @@
 //!
 
 // src/save/mod.rs
-use crate::common::character_set::{get_char, get_code};
+use self::storage::{
+    decrypt_pocket, encrypt_pocket, pocket_address, PARTY_COUNT_OFFSET, PARTY_SIZE,
+};
+use self::trainer::TimePlayed;
+use crate::common::charset::gen3::{get_char, get_code};
+use crate::common::types::Gender;
+use crate::common::types::TrainerID;
 use crate::error::{PokemonError, SaveDataError};
-use crate::misc::{find_item, item_id_g3};
-use crate::pokemon::{Gender, Pokemon};
-use crate::save::storage::{pocket_address, PARTY_COUNT_OFFSET, PARTY_SIZE};
-use crate::save::trainer::{TimePlayed, TrainerID};
+use crate::gen3::pokemon::Gen3Pokemon;
 use byteorder::{ByteOrder, LittleEndian};
 
 // --- Sub-Modules ---
@@ -155,25 +158,25 @@ impl SaveFile {
         section_data_buffer[0x000A..0x000A + 4].to_vec()
     }
 
-    pub fn get_party(&self) -> Result<Vec<Pokemon>, SaveDataError> {
+    pub fn get_party(&self) -> Result<Vec<Gen3Pokemon>, SaveDataError> {
         let game_code = self.get_game_code()?;
         let section = self
             .get_section(SectionID::TeamItems)
             .expect("Expected value but found None");
         let section_data_buffer = section.data(&self.data);
 
-        let mut team: Vec<Pokemon> = vec![];
+        let mut team: Vec<Gen3Pokemon> = vec![];
 
         if game_code == 0x00000001 {
             for (i, pokemon_data) in section_data_buffer[0x0038..0x0290].chunks(100).enumerate() {
                 let offset = section.offset() + 0x0038 + (i * 100);
-                let pokemon = Pokemon::from_bytes(offset, pokemon_data)?;
+                let pokemon = Gen3Pokemon::from_bytes(offset, pokemon_data)?;
                 team.push(pokemon);
             }
         } else {
             for (i, pokemon_data) in section_data_buffer[0x0238..0x0490].chunks(100).enumerate() {
                 let offset = section.offset() + 0x0238 + (i * 100);
-                let pokemon = Pokemon::from_bytes(offset, pokemon_data)?;
+                let pokemon = Gen3Pokemon::from_bytes(offset, pokemon_data)?;
                 team.push(pokemon);
             }
         }
@@ -181,7 +184,7 @@ impl SaveFile {
         Ok(team)
     }
 
-    pub fn pc_box(&self, number: usize) -> Result<Vec<Pokemon>, PokemonError> {
+    pub fn pc_box(&self, number: usize) -> Result<Vec<Gen3Pokemon>, PokemonError> {
         self.pc_buffer.pc_box(number)
     }
 
@@ -195,19 +198,19 @@ impl SaveFile {
         &mut self,
         box_idx: usize,
         slot_idx: usize,
-        pokemon: &Pokemon,
+        pokemon: &Gen3Pokemon,
     ) -> Result<(), SaveDataError> {
         // We only take the first 80 bytes (Persistent Data)
-        let bytes = pokemon.to_bytes();
+        let bytes = pokemon.to_bytes_array();
         self.pc_buffer
             .write_raw_slot(box_idx, slot_idx, &bytes[..80], &mut self.data)
     }
 
     pub fn swap_pokemon(
         &mut self,
-        mut from: Pokemon,
+        mut from: Gen3Pokemon,
         from_storage: StorageType,
-        mut to: Pokemon,
+        mut to: Gen3Pokemon,
         to_storage: StorageType,
     ) -> Result<(), SaveDataError> {
         std::mem::swap(&mut from.offset, &mut to.offset);
@@ -230,13 +233,13 @@ impl SaveFile {
     pub fn save_pokemon(
         &mut self,
         storage: StorageType,
-        pokemon: Pokemon,
+        pokemon: Gen3Pokemon,
     ) -> Result<(), SaveDataError> {
         match storage {
             StorageType::Party => {
                 let offset = pokemon.offset;
 
-                self.data[offset..offset + 100].copy_from_slice(&pokemon.to_bytes());
+                self.data[offset..offset + 100].copy_from_slice(&pokemon.to_bytes_array());
                 let section = self
                     .get_section(SectionID::TeamItems)
                     .expect("Expected value but found None");
@@ -313,10 +316,10 @@ impl SaveFile {
 
         let section = self
             .get_section(SectionID::TeamItems)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
+            .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
         let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
 
-        let encrypted_bag = SaveFile::encrypt_pocket(pocket_list, security_key)?;
+        let encrypted_bag = encrypt_pocket(pocket_list, security_key)?;
         section_data_buffer[start..end].copy_from_slice(&encrypted_bag);
         section.write_checksum(&mut self.data)?;
 
@@ -328,64 +331,12 @@ impl SaveFile {
 
         let section = self
             .get_section(SectionID::TeamItems)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
+            .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
         let section_data_buffer = section.data(&self.data);
 
-        let bag = SaveFile::decrypt_pocket(&section_data_buffer[start..end], security_key)?;
+        let bag = decrypt_pocket(&section_data_buffer[start..end], security_key)?;
 
         Ok(bag)
-    }
-
-    /// Helper function to decrypt pocket data using the security key.
-    ///
-    /// Each pocket entry consists of:
-    /// - First 2 bytes: Item ID (u16)
-    /// - Last 2 bytes: Quantity (u16, XORed with the security key)
-    fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<(String, u16)>, SaveDataError> {
-        let mut pocket = Vec::new();
-
-        for chunk in data.chunks(4) {
-            if chunk.len() < 4 {
-                return Err(SaveDataError::InvalidDataLength {
-                    expected: 4,
-                    found: chunk.len(),
-                });
-            }
-
-            let item_id = LittleEndian::read_u16(&chunk[0..2]);
-            let encrypted_quantity = LittleEndian::read_u16(&chunk[2..4]);
-            let quantity = encrypted_quantity ^ security_key;
-
-            let item_name = find_item(item_id as usize).unwrap_or_else(|_| "Nothing".to_string());
-            pocket.push((item_name, quantity));
-        }
-
-        Ok(pocket)
-    }
-
-    /// Helper function to encrypt pocket data using the security key.
-    ///
-    /// # Arguments
-    /// - `pocket`: A vector of tuples containing the item name and quantity.
-    /// - `security_key`: The security key used for encryption.
-    ///
-    /// # Returns
-    /// A byte vector containing the encrypted pocket data.
-    fn encrypt_pocket(
-        pocket: Vec<(String, u16)>,
-        security_key: u16,
-    ) -> Result<Vec<u8>, SaveDataError> {
-        let mut encrypted_data = Vec::new();
-
-        for (item_name, quantity) in pocket {
-            let item_id = item_id_g3(&item_name).unwrap_or(0);
-            let encrypted_quantity = quantity ^ security_key;
-
-            encrypted_data.extend(&item_id.to_le_bytes());
-            encrypted_data.extend(&encrypted_quantity.to_le_bytes());
-        }
-
-        Ok(encrypted_data)
     }
 
     pub fn raw_data(&self) -> Vec<u8> {
@@ -451,7 +402,7 @@ impl SaveFile {
     fn get_game_code(&self) -> Result<u32, SaveDataError> {
         let section = self
             .get_section(SectionID::TrainerInfo)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
+            .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
         let section_data_buffer = section.data(&self.data);
         Ok(LittleEndian::read_u32(
             &section_data_buffer[0x00AC..0x00AC + 4],
@@ -478,7 +429,7 @@ impl SaveFile {
 
         let section0 = self
             .get_section(SectionID::TrainerInfo)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
+            .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
         let data0 = section0.data(&self.data);
 
         // Name (0x00 - 0x07)
@@ -506,7 +457,7 @@ impl SaveFile {
 
         let section1 = self
             .get_section(SectionID::TeamItems)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
+            .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
         let data1 = section1.data(&self.data);
 
         // Money Offset: FRLG = 0x0290, Others = 0x0490
@@ -533,7 +484,7 @@ impl SaveFile {
 
         let section0 = self
             .get_section(SectionID::TrainerInfo)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
+            .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
         let data0 = section0.data_mut(&mut self.data);
 
         // Name
@@ -581,7 +532,7 @@ impl SaveFile {
 
         let section1 = self
             .get_section(SectionID::TeamItems)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TeamItems))?;
+            .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
 
         // Need offset again
         let money_offset = if game_code == 1 { 0x0290 } else { 0x0490 };
@@ -628,7 +579,7 @@ impl SaveFile {
 
         let section = self
             .get_section(SectionID::TrainerInfo)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
+            .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
 
         let data = section.data(&self.data);
 
@@ -647,7 +598,7 @@ impl SaveFile {
 
         let section = self
             .get_section(SectionID::TrainerInfo)
-            .ok_or(SaveDataError::SectionNotFound(SectionID::TrainerInfo))?;
+            .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
 
         // Mutable access to Section 0
         let data = section.data_mut(&mut self.data);
@@ -672,7 +623,7 @@ impl SaveFile {
     pub fn get_party_count(&self) -> Result<usize, SaveDataError> {
         let section = self
             .get_section(TEAM_SECTION_ID)
-            .ok_or(SaveDataError::SectionNotFound(TEAM_SECTION_ID))?;
+            .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
         let data = section.data(&self.data);
 
         let count = *data

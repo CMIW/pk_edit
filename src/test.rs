@@ -11,11 +11,11 @@ mod tests {
     use crate::common::character_set::{get_char, get_code};
     use crate::error::{PokemonError, SaveDataError};
     use crate::misc::extract_db;
-    use crate::pokemon::{gen_pokemon_from_species, Gender, Pokerus, Pokemon};
+    use crate::pokemon::{gen_pokemon_from_species, Gender, Pokemon, Pokerus};
     use crate::save::section::SectionID;
     use crate::save::storage::{
-        decrypt_pocket, encrypt_pocket, pocket_address, Pocket, StorageType,
-        PARTY_COUNT_OFFSET, PARTY_DATA_OFFSET, PARTY_POKEMON_SIZE, PARTY_SIZE,
+        decrypt_pocket, encrypt_pocket, pocket_address, Pocket, StorageType, PARTY_COUNT_OFFSET,
+        PARTY_DATA_OFFSET, PARTY_POKEMON_SIZE, PARTY_SIZE,
     };
     use crate::save::trainer::{GymBadges, TimePlayed, TrainerID};
 

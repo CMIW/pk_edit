@@ -8,8 +8,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use modular_bitfield::prelude::*;
 use std::fmt;
 
-// Assuming Gender is re-exported in the root of the pokemon module
-use crate::pokemon::Gender;
+use crate::common::types::{Gender, TrainerID};
 
 /// The game version identified by the game code stored in Section 0.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -20,17 +19,6 @@ pub enum GameVersion {
     FireRedLeafGreen,
     /// Any other game code.
     Emerald,
-}
-
-/// Represents the player's internal Trainer ID.
-///
-/// The Trainer ID is split into two components:
-/// - The **public ID** (lower 16 bits), which is visible in-game.
-/// - The **private ID** (upper 16 bits), which is used internally for certain mechanics (e.g., shiny Pokémon).
-#[derive(Debug, Copy, Clone, Default)]
-pub struct TrainerID {
-    pub public: u16,
-    pub private: u16,
 }
 
 impl From<[u8; 4]> for TrainerID {
@@ -44,10 +32,10 @@ impl From<[u8; 4]> for TrainerID {
 
 impl From<TrainerID> for Vec<u8> {
     fn from(val: TrainerID) -> Self {
-        let mut vec = Vec::with_capacity(4);
-        LittleEndian::write_u16(&mut vec[..2], val.public);
-        LittleEndian::write_u16(&mut vec[2..], val.private);
-        vec
+        let mut buf = [0u8; 4];
+        LittleEndian::write_u16(&mut buf[..2], val.public);
+        LittleEndian::write_u16(&mut buf[2..], val.private);
+        buf.to_vec()
     }
 }
 

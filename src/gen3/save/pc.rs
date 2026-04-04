@@ -1,6 +1,6 @@
 use super::section::{Section, SectionID};
 use crate::error::{PokemonError, SaveDataError};
-use crate::pokemon::Pokemon;
+use crate::gen3::pokemon::Gen3Pokemon;
 
 const PC_BUFFER_SECTION_SIZE: usize = 0xF80; // 3968 bytes (Buffers A-H)
 const PC_BUFFER_I_SECTION_SIZE: usize = 0x7D0; // 2000 bytes (Buffer I)
@@ -47,15 +47,15 @@ impl PCBuffer {
 
     /// Retrieves all Pokémon stored in a specific PC box.
     /// Each PC box is a fixed-size chunk of the PC Buffer, containing 30 Pokémon slots.
-    pub(crate) fn pc_box(&self, number: usize) -> Result<Vec<Pokemon>, PokemonError> {
+    pub(crate) fn pc_box(&self, number: usize) -> Result<Vec<Gen3Pokemon>, PokemonError> {
         let mut boxes = self.data[0x0004..0x8344].chunks(2400);
         let pc = boxes.nth(number).expect("Expected value but found None");
-        let mut list: Vec<Pokemon> = vec![];
+        let mut list: Vec<Gen3Pokemon> = vec![];
 
         for (i, pokemon) in pc.chunks(80).enumerate() {
             // data_offset + pc box offset + slot offset
             let offset = 0x0004 + (number * 2400) + (i * 80);
-            let pokemon = Pokemon::from_bytes(offset, pokemon)?;
+            let pokemon = Gen3Pokemon::from_bytes(offset, pokemon)?;
             list.push(pokemon);
         }
 
@@ -65,7 +65,7 @@ impl PCBuffer {
     /// Saves a Pokémon back into the PC Buffer and updates the relevant sections.
     pub(crate) fn save_pokemon(
         &mut self,
-        pokemon: Pokemon,
+        pokemon: Gen3Pokemon,
         buffer: &mut [u8],
     ) -> Result<(), SaveDataError> {
         let offset = pokemon.offset;
@@ -74,7 +74,7 @@ impl PCBuffer {
             return Err(SaveDataError::InvalidOffset(offset));
         }
 
-        self.data[offset..offset + 80].copy_from_slice(&pokemon.to_bytes()[..80]);
+        self.data[offset..offset + 80].copy_from_slice(&pokemon.to_bytes_array()[..80]);
         self.sync_and_checksum(buffer)
     }
 
