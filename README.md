@@ -46,3 +46,6 @@ src/
 ```sh
 cargo doc --open
 ```
+
+## License
+Licensed under [0BSD](LICENSE).
