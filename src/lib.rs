@@ -6,6 +6,7 @@
 //!
 //! # Example
 //! ```rust,no_run
+//! use pk_edit::GameData;
 //! use pk_edit::OpenSave;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -229,11 +230,6 @@ impl Pokemon for AnyPokemon {
             Self::Gen3(p) => p.is_bad_egg(),
         }
     }
-    fn lowest_level(&self) -> u8 {
-        match self {
-            Self::Gen3(p) => p.lowest_level(),
-        }
-    }
     fn to_bytes(&self) -> Vec<u8> {
         match self {
             Self::Gen3(p) => p.to_bytes(),
@@ -418,6 +414,11 @@ impl GameData for AnyGameData {
             Self::Gen3(g) => Ok(g.balls_sprite_ids()?),
         }
     }
+    fn lowest_level(&self, dex_num: u16) -> u8 {
+        match self {
+            Self::Gen3(g) => g.lowest_level(dex_num),
+        }
+    }
 }
 
 // --- AnyFactory ---
@@ -444,14 +445,17 @@ impl PokemonFactory for AnyFactory {
 
     fn gen_pokemon_from_species(
         &self,
+        pokemon: &AnyPokemon,
         species: &str,
         ot_name: &str,
         ot_id: TrainerID,
     ) -> Result<AnyPokemon, error::PokemonError> {
         match self {
-            Self::Gen3(f) => f
-                .gen_pokemon_from_species(species, ot_name, ot_id)
-                .map(AnyPokemon::Gen3),
+            Self::Gen3(f) => match pokemon {
+                AnyPokemon::Gen3(p) => f
+                    .gen_pokemon_from_species(p, species, ot_name, ot_id)
+                    .map(AnyPokemon::Gen3),
+            },
         }
     }
 }
@@ -465,7 +469,7 @@ impl PokemonFactory for AnyFactory {
 /// Use [`OpenSave::game_data`] to get the matching data provider.
 #[derive(Debug)]
 pub enum OpenSave {
-    /// A Generation III save (Ruby, Sapphire, Emerald, FireRed, LeafGreen).
+    /// A Generation III save (`Ruby`, `Sapphire`, `Emerald`, `FireRed`, `LeafGreen`).
     Gen3(gen3::save::SaveFile),
 }
 
@@ -619,6 +623,10 @@ impl OpenSave {
 /// # Errors
 /// Returns [`DetectError::TooSmall`] if the buffer is under 128 bytes.
 /// Returns [`DetectError::UnknownFormat`] if no supported format matches.
+/// Returns [`SaveDataError::ChecksumMismatch`] if any section checksum is invalid.
+/// Returns [`DetectError::TooSmall`] if the buffer is too small.
+/// Returns [`DetectError::UnknownFormat`] if the file size doesn't match any supported format.
+/// Returns [`DetectError::ChecksumFailed`] if any section checksum is invalid.
 pub fn open(data: &[u8]) -> Result<OpenSave, DetectError> {
     const GEN3_SIZE: usize = 131_072; // 128 KB
 
@@ -627,7 +635,10 @@ pub fn open(data: &[u8]) -> Result<OpenSave, DetectError> {
     }
 
     match data.len() {
-        GEN3_SIZE => Ok(OpenSave::Gen3(gen3::save::SaveFile::new(data))),
+        GEN3_SIZE => {
+            let save = gen3::save::SaveFile::new(data).map_err(DetectError::ChecksumFailed)?;
+            Ok(OpenSave::Gen3(save))
+        }
         n => Err(DetectError::UnknownFormat(n)),
     }
 }

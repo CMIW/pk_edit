@@ -98,12 +98,15 @@ const GAME_SAVE_B_OFFSET: usize = 0x00E000;
 pub struct SaveFile {
     game_save_a: [Section; NUMBER_GAME_SAVE_SECTIONS],
     game_save_b: [Section; NUMBER_GAME_SAVE_SECTIONS],
-    pub data: Vec<u8>,
+    data: Vec<u8>,
     pc_buffer: PCBuffer,
 }
 
 impl SaveFile {
-    pub fn new(data: &[u8]) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`SaveDataError::ChecksumMismatch`] if any section checksum is invalid.
+    pub fn new(data: &[u8]) -> Result<Self, SaveDataError> {
         let mut game_save_a: [Section; NUMBER_GAME_SAVE_SECTIONS] =
             [Section::default(); NUMBER_GAME_SAVE_SECTIONS];
         let mut game_save_b: [Section; NUMBER_GAME_SAVE_SECTIONS] =
@@ -131,39 +134,62 @@ impl SaveFile {
             pc_buffer: PCBuffer::default(),
         };
 
-        save.init_pc_buffer();
+        save.init_pc_buffer()?;
 
-        save
+        for section in &save.game_save_a {
+            section.validate_checksum(&save.data)?;
+        }
+
+        for section in &save.game_save_b {
+            section.validate_checksum(&save.data)?;
+        }
+
+        Ok(save)
     }
 
     pub fn is_empty(&self) -> bool {
         self.data.len() == 0
     }
 
-    pub fn ot_name(&self) -> Vec<u8> {
-        let section = self
-            .get_section(SectionID::TrainerInfo)
-            .expect("Expected value but found None");
-        let section_data_buffer = section.data(&self.data);
+    ///
+    /// # Errors
+    /// Returns an error if the TrainerInfo section is missing or data is invalid.
+    pub fn ot_name(&self) -> Result<Vec<u8>, SaveDataError> {
+        let section =
+            self.get_section(SectionID::TrainerInfo)
+                .ok_or(SaveDataError::SectionNotFound(
+                    SectionID::TrainerInfo.to_string(),
+                ))?;
+        let section_data_buffer = section.data(&self.data)?;
 
-        section_data_buffer[0x0000..7].to_vec()
+        Ok(section_data_buffer[0x0000..7].to_vec())
     }
 
-    pub fn ot_id(&self) -> Vec<u8> {
-        let section = self
-            .get_section(SectionID::TrainerInfo)
-            .expect("Expected value but found None");
-        let section_data_buffer = section.data(&self.data);
+    ///
+    /// # Errors
+    /// Returns an error if the TrainerInfo section is missing or data is invalid.
+    pub fn ot_id(&self) -> Result<Vec<u8>, SaveDataError> {
+        let section =
+            self.get_section(SectionID::TrainerInfo)
+                .ok_or(SaveDataError::SectionNotFound(
+                    SectionID::TrainerInfo.to_string(),
+                ))?;
+        let section_data_buffer = section.data(&self.data)?;
 
-        section_data_buffer[0x000A..0x000A + 4].to_vec()
+        Ok(section_data_buffer[0x000A..0x000A + 4].to_vec())
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the TeamItems section is missing or party data is invalid.
     pub fn get_party(&self) -> Result<Vec<Gen3Pokemon>, SaveDataError> {
         let game_code = self.get_game_code()?;
-        let section = self
-            .get_section(SectionID::TeamItems)
-            .expect("Expected value but found None");
-        let section_data_buffer = section.data(&self.data);
+        let section =
+            self.get_section(SectionID::TeamItems)
+                .ok_or(SaveDataError::SectionNotFound(
+                    SectionID::TeamItems.to_string(),
+                ))?;
+        let section_data_buffer = section.data(&self.data)?;
 
         let mut team: Vec<Gen3Pokemon> = vec![];
 
@@ -184,6 +210,9 @@ impl SaveFile {
         Ok(team)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the box number is invalid or PC data is corrupted.
     pub fn pc_box(&self, number: usize) -> Result<Vec<Gen3Pokemon>, PokemonError> {
         self.pc_buffer.pc_box(number)
     }
@@ -194,6 +223,9 @@ impl SaveFile {
 
     /// Sets a Pokémon at a specific PC location.
     /// Overwrites whatever was there. Use this for injecting new Pokémon.
+    ///
+    /// # Errors
+    /// Returns an error if the box/slot is invalid or write fails.
     pub fn set_pc_pokemon(
         &mut self,
         box_idx: usize,
@@ -206,6 +238,9 @@ impl SaveFile {
             .write_raw_slot(box_idx, slot_idx, &bytes[..80], &mut self.data)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if either storage location is invalid.
     pub fn swap_pokemon(
         &mut self,
         mut from: Gen3Pokemon,
@@ -220,6 +255,9 @@ impl SaveFile {
     }
 
     /// Deletes a Pokémon by overwriting it with zeros.
+    ///
+    /// # Errors
+    /// Returns an error if the box/slot is invalid.
     pub fn delete_pc_pokemon(
         &mut self,
         box_idx: usize,
@@ -230,6 +268,9 @@ impl SaveFile {
             .write_raw_slot(box_idx, slot_idx, &empty_data, &mut self.data)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the storage location is invalid or write fails.
     pub fn save_pokemon(
         &mut self,
         storage: StorageType,
@@ -239,10 +280,15 @@ impl SaveFile {
             StorageType::Party => {
                 let offset = pokemon.offset;
 
-                self.data[offset..offset + 100].copy_from_slice(&pokemon.to_bytes_array());
-                let section = self
-                    .get_section(SectionID::TeamItems)
-                    .expect("Expected value but found None");
+                let data = self
+                    .data
+                    .get_mut(offset..offset + 100)
+                    .ok_or(SaveDataError::InvalidOffset(offset))?;
+                data.copy_from_slice(&pokemon.to_bytes_array());
+
+                let section = self.get_section(SectionID::TeamItems).ok_or(
+                    SaveDataError::SectionNotFound(SectionID::TeamItems.to_string()),
+                )?;
                 section.write_checksum(&mut self.data)?;
             }
             StorageType::PC => {
@@ -256,12 +302,19 @@ impl SaveFile {
     /// For Ruby and Sapphire, this value will be 0x00000000.
     /// For FireRed and LeafGreen, this value will be 0x00000001.
     /// For Emerald any value other than 0 or 1 can be used.
-    pub fn game_code(&self) -> u32 {
-        let section = self
-            .get_section(SectionID::TrainerInfo)
-            .expect("Expected value but found None");
-        let section_data_buffer = section.data(&self.data);
-        LittleEndian::read_u32(&section_data_buffer[0x00AC..0x00AC + 4])
+    ///
+    /// # Errors
+    /// Returns an error if the TrainerInfo section is missing.
+    pub fn game_code(&self) -> Result<u32, SaveDataError> {
+        let section =
+            self.get_section(SectionID::TrainerInfo)
+                .ok_or(SaveDataError::SectionNotFound(
+                    SectionID::TrainerInfo.to_string(),
+                ))?;
+        let section_data_buffer = section.data(&self.data)?;
+        Ok(LittleEndian::read_u32(
+            &section_data_buffer[0x00AC..0x00AC + 4],
+        ))
     }
 
     /// The security_key location may vary depending on the game.
@@ -272,31 +325,40 @@ impl SaveFile {
     /// | 0x0AF8 |   4  | FrLg |
     /// --------------------------------------
     /// Ruby and Sapphire either do not utilize this masking operation, or the mask is always zero.
-    fn security_key(&self) -> u32 {
-        let game_code = self.game_code();
+    fn security_key(&self) -> Result<u32, SaveDataError> {
+        let game_code = self.game_code()?;
 
         if game_code == 0x00000000 {
-            0x00000000
+            Ok(0x00000000)
         } else if game_code == 0x00000001 {
-            let section = self
-                .get_section(SectionID::TrainerInfo)
-                .expect("Expected value but found None");
-            let section_data_buffer = section.data(&self.data);
-            LittleEndian::read_u32(&section_data_buffer[0x0AF8..0x0AF8 + 4])
+            let section =
+                self.get_section(SectionID::TrainerInfo)
+                    .ok_or(SaveDataError::SectionNotFound(
+                        SectionID::TrainerInfo.to_string(),
+                    ))?;
+            let section_data_buffer = section.data(&self.data)?;
+            Ok(LittleEndian::read_u32(
+                &section_data_buffer[0x0AF8..0x0AF8 + 4],
+            ))
         } else {
-            game_code
+            Ok(game_code)
         }
     }
 
-    fn security_key_lower(&self) -> u16 {
-        LittleEndian::read_u16(&self.security_key().to_le_bytes()[..2])
+    fn security_key_lower(&self) -> Result<u16, SaveDataError> {
+        Ok(LittleEndian::read_u16(
+            &self.security_key()?.to_le_bytes()[..2],
+        ))
     }
 
     /// Retrieves the pocket data from the save file.
     ///
     /// Offsets and data encryption vary depending on the game version.
+    ///
+    /// # Errors
+    /// Returns an error if the pocket data is invalid or write fails.
     pub fn pocket(&self, pocket: Pocket) -> Result<Vec<(String, u16)>, SaveDataError> {
-        let game_code = self.game_code();
+        let game_code = self.game_code()?;
         let (start, end) = pocket_address(pocket, game_code);
         self.read_pocket(start, end)
     }
@@ -305,19 +367,22 @@ impl SaveFile {
     ///
     /// This function writes the modified pocket data into the corresponding save section,
     /// encrypting it with the security key.
+    ///
+    /// # Errors
+    /// Returns an error if the pocket data is invalid or write fails.
     pub fn save_pocket(
         &mut self,
         pocket_type: Pocket,
         pocket_list: Vec<(String, u16)>,
     ) -> Result<(), SaveDataError> {
-        let game_code = self.game_code();
-        let security_key = self.security_key_lower();
+        let game_code = self.game_code()?;
+        let security_key = self.security_key_lower()?;
         let (start, end) = pocket_address(pocket_type, game_code);
 
         let section = self
             .get_section(SectionID::TeamItems)
             .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
-        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data);
+        let section_data_buffer: &mut [u8] = section.data_mut(&mut self.data)?;
 
         let encrypted_bag = encrypt_pocket(pocket_list, security_key)?;
         section_data_buffer[start..end].copy_from_slice(&encrypted_bag);
@@ -327,12 +392,12 @@ impl SaveFile {
     }
 
     fn read_pocket(&self, start: usize, end: usize) -> Result<Vec<(String, u16)>, SaveDataError> {
-        let security_key = self.security_key_lower();
+        let security_key = self.security_key_lower()?;
 
         let section = self
             .get_section(SectionID::TeamItems)
             .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
-        let section_data_buffer = section.data(&self.data);
+        let section_data_buffer = section.data(&self.data)?;
 
         let bag = decrypt_pocket(&section_data_buffer[start..end], security_key)?;
 
@@ -343,31 +408,35 @@ impl SaveFile {
         self.data.to_vec()
     }
 
-    fn init_pc_buffer(&mut self) {
-        let current_save = self.current_save();
+    fn init_pc_buffer(&mut self) -> Result<(), SaveDataError> {
+        let current_save = self.current_save()?;
 
         let range = 5..=13;
 
         // Read all the Sections that hold the pc buffer from PCBufferA to PCbufferI
-        let mut sections: Vec<&Section> = current_save
-            .iter()
-            .filter(|section| range.contains(&section.id(&self.data).into()))
-            .collect();
+        let mut sections: Vec<(Section, SectionID)> = Vec::new();
+        for section in current_save.iter() {
+            let id = section.id(&self.data)?; // ? works here - we're in a fn returning Result
+            if range.contains(&id.into()) {
+                sections.push((*section, id));
+            }
+        }
 
         sections.sort_by(|a, b| {
-            a.id(&self.data)
-                .partial_cmp(&b.id(&self.data))
+            a.1.partial_cmp(&b.1)
                 .expect("Expected value but found None")
         });
 
-        let sections: Vec<Section> = sections.iter().map(|section| **section).collect();
+        let sections: Vec<Section> = sections.iter().map(|(s, _)| *s).collect();
 
         // Store them into an array for easy access
         let mut pc_buffer: [Section; 9] = [Section::default(); 9];
 
         pc_buffer.copy_from_slice(sections.as_slice());
 
-        self.pc_buffer = PCBuffer::new(pc_buffer, &self.data);
+        self.pc_buffer = PCBuffer::new(pc_buffer, &self.data)?;
+
+        Ok(())
     }
 
     /// Determines the most recent save block (A or B) based on the save index.
@@ -377,18 +446,18 @@ impl SaveFile {
     /// is saved, even when starting a new game.
     ///
     /// Returns a slice of sections corresponding to the most recent save block.
-    fn current_save(&self) -> &[Section] {
-        let save_index_a = self.game_save_a[0].save_index(&self.data);
-        let save_index_b = self.game_save_b[0].save_index(&self.data);
+    fn current_save(&self) -> Result<&[Section], SaveDataError> {
+        let save_index_a = self.game_save_a[0].save_index(&self.data)?;
+        let save_index_b = self.game_save_b[0].save_index(&self.data)?;
 
         if save_index_a == u32::MAX {
-            return &self.game_save_b;
+            return Ok(&self.game_save_b);
         }
         if save_index_a > save_index_b {
-            return &self.game_save_a;
+            return Ok(&self.game_save_a);
         }
 
-        &self.game_save_b
+        Ok(&self.game_save_b)
     }
 
     /// Retrieves the game code, which identifies the version of the game (e.g., Ruby, Sapphire, Emerald).
@@ -403,24 +472,27 @@ impl SaveFile {
         let section = self
             .get_section(SectionID::TrainerInfo)
             .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
-        let section_data_buffer = section.data(&self.data);
+        let section_data_buffer = section.data(&self.data)?;
         Ok(LittleEndian::read_u32(
             &section_data_buffer[0x00AC..0x00AC + 4],
         ))
     }
 
     fn get_section(&self, id: SectionID) -> Option<Section> {
-        let current_save = self.current_save();
+        let current_save = self.current_save().ok()?;
 
         current_save
             .iter()
-            .find(|section| section.id(&self.data) == id)
+            .find(|section| section.id(&self.data).ok() == Some(id))
             .copied()
     }
 
     /// Retrieves the high-level Trainer data (Name, ID, Money, Time, etc.)
+    ///
+    /// # Errors
+    /// Returns an error if the TrainerInfo or TeamItems sections are missing or data is invalid.
     pub fn trainer(&self) -> Result<Trainer, SaveDataError> {
-        let game_code = self.game_code();
+        let game_code = self.game_code()?;
         let version = match game_code {
             0 => GameVersion::RubySapphire,
             1 => GameVersion::FireRedLeafGreen,
@@ -430,7 +502,7 @@ impl SaveFile {
         let section0 = self
             .get_section(SectionID::TrainerInfo)
             .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
-        let data0 = section0.data(&self.data);
+        let data0 = section0.data(&self.data)?;
 
         // Name (0x00 - 0x07)
         let name_bytes = &data0[0x00..0x08]; // 7 chars + terminator
@@ -458,13 +530,13 @@ impl SaveFile {
         let section1 = self
             .get_section(SectionID::TeamItems)
             .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
-        let data1 = section1.data(&self.data);
+        let data1 = section1.data(&self.data)?;
 
         // Money Offset: FRLG = 0x0290, Others = 0x0490
         let money_offset = if game_code == 1 { 0x0290 } else { 0x0490 };
 
         let encrypted_money = LittleEndian::read_u32(&data1[money_offset..money_offset + 4]);
-        let money = encrypted_money ^ self.security_key();
+        let money = encrypted_money ^ self.security_key()?;
 
         Ok(Trainer {
             name,
@@ -473,19 +545,22 @@ impl SaveFile {
             time_played,
             money,
             game_version: version,
-            security_key: self.security_key(),
+            security_key: self.security_key()?,
         })
     }
 
     /// Saves the modified Trainer struct back to the file.
     /// Updates both Section 0 (Info) and Section 1 (Money).
+    ///
+    /// # Errors
+    /// Returns an error if the TrainerInfo or TeamItems sections are missing or write fails.
     pub fn save_trainer(&mut self, trainer: &Trainer) -> Result<(), SaveDataError> {
-        let game_code = self.game_code();
+        let game_code = self.game_code()?;
 
         let section0 = self
             .get_section(SectionID::TrainerInfo)
             .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
-        let data0 = section0.data_mut(&mut self.data);
+        let data0 = section0.data_mut(&mut self.data)?;
 
         // Name
         let encoded_name: Vec<u8> = trainer
@@ -538,11 +613,11 @@ impl SaveFile {
         let money_offset = if game_code == 1 { 0x0290 } else { 0x0490 };
 
         // Encrypt Money
-        let encrypted_money = trainer.money ^ self.security_key();
+        let encrypted_money = trainer.money ^ self.security_key()?;
 
         // We need a mutable reference to data again, but we can't hold two mutable borrows of `self.data`
         // So we re-acquire the slice for Section 1
-        let data1 = section1.data_mut(&mut self.data);
+        let data1 = section1.data_mut(&mut self.data)?;
         LittleEndian::write_u32(
             data1
                 .get_mut(money_offset..money_offset + 4)
@@ -558,7 +633,7 @@ impl SaveFile {
 
     /// Internal helper to find the badge byte offset within Section 0 (Trainer Info).
     fn badge_offset(&self) -> Result<usize, SaveDataError> {
-        let game_code = self.game_code();
+        let game_code = self.game_code()?;
 
         // The Badges are a single byte located in Section 0.
         // Offsets vary significantly by version:
@@ -574,6 +649,9 @@ impl SaveFile {
     }
 
     /// Retrieves the Gym Badges flags.
+    ///
+    /// # Errors
+    /// Returns an error if the TrainerInfo section is missing or write fails.
     pub fn badges(&self) -> Result<GymBadges, SaveDataError> {
         let offset = self.badge_offset()?;
 
@@ -581,7 +659,7 @@ impl SaveFile {
             .get_section(SectionID::TrainerInfo)
             .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
 
-        let data = section.data(&self.data);
+        let data = section.data(&self.data)?;
 
         if offset >= data.len() {
             return Err(SaveDataError::InvalidOffset(offset));
@@ -593,6 +671,9 @@ impl SaveFile {
     }
 
     /// Writes the Gym Badges flags and updates the checksum.
+    ///
+    /// # Errors
+    /// Returns an error if the TeamItems section is missing.
     pub fn set_badges(&mut self, badges: GymBadges) -> Result<(), SaveDataError> {
         let offset = self.badge_offset()?;
 
@@ -601,7 +682,7 @@ impl SaveFile {
             .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
 
         // Mutable access to Section 0
-        let data = section.data_mut(&mut self.data);
+        let data = section.data_mut(&mut self.data)?;
 
         if offset >= data.len() {
             return Err(SaveDataError::InvalidOffset(offset));
@@ -620,11 +701,14 @@ impl SaveFile {
     }
 
     /// Reads the current number of Pokémon in the party.
+    ///
+    /// # Errors
+    /// Returns an error if the TeamItems section is missing.
     pub fn get_party_count(&self) -> Result<usize, SaveDataError> {
         let section = self
             .get_section(TEAM_SECTION_ID)
             .ok_or(SaveDataError::SectionNotFound("TeamItems".to_string()))?;
-        let data = section.data(&self.data);
+        let data = section.data(&self.data)?;
 
         let count = *data
             .get(PARTY_COUNT_OFFSET)

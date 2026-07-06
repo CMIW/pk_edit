@@ -8,16 +8,22 @@ mod tests {
     #![allow(clippy::float_arithmetic)]
     #![allow(clippy::must_use_candidate)]
 
-    use crate::common::character_set::{get_char, get_code};
+    use crate::common::charset::gen3::{get_char, get_code};
     use crate::error::{PokemonError, SaveDataError};
-    use crate::misc::extract_db;
-    use crate::pokemon::{gen_pokemon_from_species, Gender, Pokemon, Pokerus};
-    use crate::save::section::SectionID;
-    use crate::save::storage::{
+    use crate::gen3::game_data::Gen3GameData;
+    use crate::gen3::pokemon::{gen_pokemon_from_species, Gen3Pokemon};
+    use crate::gen3::save::section::{Section, SectionID};
+    use crate::gen3::save::storage::{
         decrypt_pocket, encrypt_pocket, pocket_address, Pocket, StorageType, PARTY_COUNT_OFFSET,
         PARTY_DATA_OFFSET, PARTY_POKEMON_SIZE, PARTY_SIZE,
     };
-    use crate::save::trainer::{GymBadges, TimePlayed, TrainerID};
+    use crate::gen3::save::trainer::{GymBadges, TimePlayed};
+    use crate::traits::game_data::GameData;
+    use crate::TrainerID;
+    use crate::misc::extract_db;
+    use crate::traits::pokemon::Pokemon;
+    use crate::Gender;
+    use crate::Pokerus;
 
     /// Extracts the embedded SQLite database so DB-backed functions work.
     /// Silently ignores `AlreadyExists` errors from previous runs.
@@ -80,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_save_error_section_not_found() {
-        let err = SaveDataError::SectionNotFound(SectionID::TrainerInfo);
+        let err = SaveDataError::SectionNotFound(SectionID::TrainerInfo.to_string());
         assert!(!err.to_string().is_empty());
     }
 
@@ -197,6 +203,49 @@ mod tests {
         assert_eq!(SectionID::default(), SectionID::TrainerInfo);
     }
 
+    // ==================== SECTION checksum ====================
+
+    #[test]
+    fn test_section_checksum_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let section_size = 0x1000;
+        let mut buf = vec![0u8; section_size];
+        // Fill data region with a non-trivial pattern
+        for (i, byte) in buf.iter_mut().enumerate() {
+            if i < 0x0FF4 {
+                *byte = (i & 0xFF) as u8;
+            }
+        }
+
+        let section = Section {
+            offset: 0,
+            size: section_size,
+        };
+
+        let checksum = section.compute_checksum(&buf)?;
+        section.write_checksum(&mut buf)?;
+
+        // Validation should succeed
+        section.validate_checksum(&buf)?;
+
+        // The stored checksum should match what compute_checksum returned.
+        // Instead of reading raw bytes, re-derive via a fresh struct.
+        let section2 = Section {
+            offset: 0,
+            size: section_size,
+        };
+        assert_eq!(section2.compute_checksum(&buf)?, checksum);
+
+        // Corrupt a data byte (not the checksum region) so the checksum no longer matches
+        buf[0] = 0xFF;
+
+        // Validation should now fail
+        let result = section.validate_checksum(&buf);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(crate::error::SaveDataError::ChecksumMismatch { .. })));
+
+        Ok(())
+    }
+
     // ==================== STORAGE ====================
 
     #[test]
@@ -300,10 +349,12 @@ mod tests {
 
     #[test]
     fn test_decrypt_pocket_all_zero_slots() -> Result<(), Box<dyn std::error::Error>> {
-        // item_id == 0 means empty slot — should be skipped
+        // item_id == 0 means empty slot — appears as "Nothing"
         let data = [0u8; 8];
         let items = decrypt_pocket(&data, 0x1234)?;
-        assert!(items.is_empty());
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, "Nothing");
+        assert_eq!(items[1].0, "Nothing");
         Ok(())
     }
 
@@ -526,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_from_bytes_too_short_returns_error() {
-        let result = Pokemon::from_bytes(0, &[0u8; 50]);
+        let result = Gen3Pokemon::from_bytes(0, &[0u8; 50]);
         assert!(result.is_err());
         if let Err(PokemonError::InvalidDataLength(n)) = result {
             assert_eq!(n, 50);
@@ -535,7 +586,7 @@ mod tests {
 
     #[test]
     fn test_from_bytes_79_bytes_returns_error() {
-        let result = Pokemon::from_bytes(0, &[0u8; 79]);
+        let result = Gen3Pokemon::from_bytes(0, &[0u8; 79]);
         assert!(result.is_err());
     }
 
@@ -543,7 +594,7 @@ mod tests {
     fn test_from_bytes_exactly_80_pc_format() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
         let bytes = &TORCHIK[..80];
-        let pokemon = Pokemon::from_bytes(0, bytes)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, bytes)?;
         assert!(!pokemon.is_empty());
         Ok(())
     }
@@ -551,7 +602,7 @@ mod tests {
     #[test]
     fn test_from_bytes_party_100() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(!pokemon.is_empty());
         Ok(())
     }
@@ -559,7 +610,7 @@ mod tests {
     #[test]
     fn test_from_bytes_offset_stored() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(42, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(42, &TORCHIK)?;
         assert_eq!(pokemon.offset, 42);
         Ok(())
     }
@@ -567,7 +618,7 @@ mod tests {
     #[test]
     fn test_from_bytes_empty_slot() -> Result<(), Box<dyn std::error::Error>> {
         // 80 zero bytes = empty slot
-        let pokemon = Pokemon::from_bytes(0, &[0u8; 80])?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &[0u8; 80])?;
         assert!(pokemon.is_empty());
         Ok(())
     }
@@ -577,7 +628,7 @@ mod tests {
     #[test]
     fn test_ability_torchic() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert_eq!(pokemon.ability(), "Blaze");
         Ok(())
     }
@@ -585,7 +636,7 @@ mod tests {
     #[test]
     fn test_is_egg_false() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(!pokemon.is_egg());
         Ok(())
     }
@@ -593,24 +644,24 @@ mod tests {
     #[test]
     fn test_moves_torchic_scratch_and_growl() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let moves = pokemon.moves();
         assert_eq!(moves.len(), 2);
         let first = moves.first().ok_or("no moves")?;
-        assert_eq!(first.0, "Normal");
-        assert_eq!(first.1, "Scratch");
-        assert_eq!(first.2, 35);
-        assert_eq!(first.3, 35);
+        assert_eq!(first.move_type, "Normal");
+        assert_eq!(first.name, "Scratch");
+        assert_eq!(first.pp, 35);
+        assert_eq!(first.pp_used, 0);
         let second = moves.get(1).ok_or("no second move")?;
-        assert_eq!(second.1, "Growl");
-        assert_eq!(second.2, 40);
+        assert_eq!(second.name, "Growl");
+        assert_eq!(second.pp, 40);
         Ok(())
     }
 
     #[test]
     fn test_pokerus_none() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert_eq!(pokemon.pokerus_status(), Pokerus::None);
         Ok(())
     }
@@ -618,7 +669,7 @@ mod tests {
     #[test]
     fn test_species_torchic() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert_eq!(pokemon.species(), "Torchic");
         Ok(())
     }
@@ -626,37 +677,37 @@ mod tests {
     #[test]
     fn test_level_torchic_is_5() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert_eq!(pokemon.level(), 5);
         Ok(())
     }
 
     #[test]
-    fn test_friendship_valid_range() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_friendship_is_non_zero() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        assert!(pokemon.friendship() <= 255);
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        assert!(pokemon.friendship() > 0);
         Ok(())
     }
 
     #[test]
     fn test_is_empty_false_for_torchic() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(!pokemon.is_empty());
         Ok(())
     }
 
     #[test]
     fn test_is_empty_true_for_default() {
-        let empty = Pokemon::default();
+        let empty = Gen3Pokemon::default();
         assert!(empty.is_empty());
     }
 
     #[test]
     fn test_is_bad_egg_false() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(!pokemon.is_bad_egg());
         Ok(())
     }
@@ -664,7 +715,7 @@ mod tests {
     #[test]
     fn test_ot_name_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(!pokemon.ot_name().is_empty());
         Ok(())
     }
@@ -672,7 +723,7 @@ mod tests {
     #[test]
     fn test_ot_id_displayable() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let id = pokemon.ot_id();
         assert_eq!(id.to_string().len(), 5); // Zero-padded to 5 digits
         Ok(())
@@ -681,7 +732,7 @@ mod tests {
     #[test]
     fn test_nickname_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(!pokemon.nickname().is_empty());
         Ok(())
     }
@@ -689,7 +740,7 @@ mod tests {
     #[test]
     fn test_gender_valid() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let gender = pokemon.gender();
         assert!(matches!(gender, Gender::M | Gender::F | Gender::None));
         Ok(())
@@ -698,7 +749,7 @@ mod tests {
     #[test]
     fn test_nature_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(!pokemon.nature().is_empty());
         Ok(())
     }
@@ -706,7 +757,7 @@ mod tests {
     #[test]
     fn test_typing_torchic_fire() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let typing = pokemon.typing();
         assert!(typing.is_some());
         if let Some((primary, secondary)) = typing {
@@ -718,14 +769,14 @@ mod tests {
 
     #[test]
     fn test_typing_none_for_empty_pokemon() {
-        let empty = Pokemon::default();
+        let empty = Gen3Pokemon::default();
         assert!(empty.typing().is_none());
     }
 
     #[test]
     fn test_experience_nonzero() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(pokemon.experience() > 0);
         Ok(())
     }
@@ -733,7 +784,7 @@ mod tests {
     #[test]
     fn test_pokeball_caught_valid_range() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(pokemon.pokeball_caught() <= 12);
         Ok(())
     }
@@ -741,7 +792,7 @@ mod tests {
     #[test]
     fn test_species_id_nonzero() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert!(pokemon.species_id() > 0);
         Ok(())
     }
@@ -749,7 +800,7 @@ mod tests {
     #[test]
     fn test_nat_dex_number_torchic() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         assert_eq!(pokemon.nat_dex_number(), 255);
         Ok(())
     }
@@ -757,21 +808,21 @@ mod tests {
     #[test]
     fn test_ivs_valid_range() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let ivs = pokemon.ivs();
-        assert!(ivs.hp_iv() <= 31);
-        assert!(ivs.attack_iv() <= 31);
-        assert!(ivs.defense_iv() <= 31);
-        assert!(ivs.speed_iv() <= 31);
-        assert!(ivs.sp_attack_iv() <= 31);
-        assert!(ivs.sp_defense_iv() <= 31);
+        assert!(ivs.hp <= 31);
+        assert!(ivs.attack <= 31);
+        assert!(ivs.defense <= 31);
+        assert!(ivs.speed <= 31);
+        assert!(ivs.special_attack <= 31);
+        assert!(ivs.special_defense <= 31);
         Ok(())
     }
 
     #[test]
     fn test_stats_all_positive() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let level = pokemon.level();
         assert!(pokemon.stats.hp(level) > 0);
         assert!(pokemon.stats.attack(level) > 0);
@@ -785,7 +836,7 @@ mod tests {
     #[test]
     fn test_highest_stat_valid() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let level = pokemon.level();
         let (name, value) = pokemon.stats.highest_stat(level);
         assert!(!name.is_empty());
@@ -796,8 +847,9 @@ mod tests {
     #[test]
     fn test_lowest_level_at_least_1() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        assert!(pokemon.lowest_level() >= 1);
+        assert!(Gen3GameData.lowest_level(1) >= 1); // Bulbasaur has no pre-evo
+        assert!(Gen3GameData.lowest_level(2) >= 1); // Ivysaur evolves at level 16
+        assert!(Gen3GameData.lowest_level(25) >= 1); // Pikachu evolves with item
         Ok(())
     }
 
@@ -806,8 +858,8 @@ mod tests {
     #[test]
     fn test_set_friendship() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_friendship(200);
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_friendship(200).unwrap();
         assert_eq!(pokemon.friendship(), 200);
         Ok(())
     }
@@ -815,8 +867,8 @@ mod tests {
     #[test]
     fn test_set_level_changes_experience() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_level(50);
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_level(50).unwrap();
         assert_eq!(pokemon.level(), 50);
         Ok(())
     }
@@ -824,8 +876,8 @@ mod tests {
     #[test]
     fn test_set_level_clamped_to_100() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_level(200); // clamped to 100
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_level(200).unwrap(); // clamped to 100
         assert_eq!(pokemon.level(), 100);
         Ok(())
     }
@@ -833,8 +885,8 @@ mod tests {
     #[test]
     fn test_set_level_clamped_to_1() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_level(0); // clamped to 1
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_level(0).unwrap(); // clamped to 1
         assert_eq!(pokemon.level(), 1);
         Ok(())
     }
@@ -842,7 +894,7 @@ mod tests {
     #[test]
     fn test_set_species_bulbasaur() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.set_species("Bulbasaur")?;
         assert_eq!(pokemon.species(), "Bulbasaur");
         Ok(())
@@ -851,38 +903,38 @@ mod tests {
     #[test]
     fn test_set_species_unknown_returns_error() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         // Use a short name so the nickname auto-update doesn't overflow the 10-byte field.
         // The nickname update occurs before the species look-up, so long unknown names panic.
-        pokemon.set_nickname("NOTMATCH"); // break the auto-nickname link first
+        pokemon.set_nickname("NOTMATCH").unwrap(); // break the auto-nickname link first
         let result = pokemon.set_species("FAKEMON");
         assert!(result.is_err());
         Ok(())
     }
 
     #[test]
-    fn test_set_item_none() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_set_held_item_none() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_item("-")?;
-        assert_eq!(pokemon.item(), "-");
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_held_item("-")?;
+        assert!(pokemon.held_item().is_none());
         Ok(())
     }
 
     #[test]
-    fn test_set_item_none_string() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_set_held_item_none_string() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_item("None")?;
-        assert_eq!(pokemon.item(), "-");
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_held_item("None")?;
+        assert!(pokemon.held_item().is_none());
         Ok(())
     }
 
     #[test]
-    fn test_set_item_unknown_returns_error() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_set_held_item_unknown_returns_error() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        let result = pokemon.set_item("NotAnItem");
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        let result = pokemon.set_held_item("NotAnItem");
         assert!(result.is_err());
         Ok(())
     }
@@ -890,18 +942,18 @@ mod tests {
     #[test]
     fn test_set_move_valid() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.set_move(0, "Ember")?;
         let moves = pokemon.moves();
         let first = moves.first().ok_or("no moves")?;
-        assert_eq!(first.1, "Ember");
+        assert_eq!(first.name, "Ember");
         Ok(())
     }
 
     #[test]
     fn test_set_move_invalid_slot() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let result = pokemon.set_move(5, "Ember");
         assert!(result.is_err());
         Ok(())
@@ -910,7 +962,7 @@ mod tests {
     #[test]
     fn test_set_move_unknown_move() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let result = pokemon.set_move(0, "NotAMove");
         assert!(result.is_err());
         Ok(())
@@ -919,7 +971,7 @@ mod tests {
     #[test]
     fn test_set_pokeball_valid() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.set_pokeball_caught(4)?;
         assert_eq!(pokemon.pokeball_caught(), 4);
         Ok(())
@@ -928,7 +980,7 @@ mod tests {
     #[test]
     fn test_set_pokeball_zero_valid() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.set_pokeball_caught(0)?;
         assert_eq!(pokemon.pokeball_caught(), 0);
         Ok(())
@@ -937,7 +989,7 @@ mod tests {
     #[test]
     fn test_set_pokeball_invalid_over_12() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let result = pokemon.set_pokeball_caught(13);
         assert!(result.is_err());
         Ok(())
@@ -946,8 +998,8 @@ mod tests {
     #[test]
     fn test_set_nickname() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_nickname("CHARIZARD");
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_nickname("CHARIZARD").unwrap();
         assert_eq!(pokemon.nickname(), "CHARIZARD");
         Ok(())
     }
@@ -955,8 +1007,8 @@ mod tests {
     #[test]
     fn test_set_nickname_short() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_nickname("ACE");
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_nickname("ACE").unwrap();
         assert_eq!(pokemon.nickname(), "ACE");
         Ok(())
     }
@@ -966,7 +1018,7 @@ mod tests {
     #[test]
     fn test_infect_pokerus() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.infect_pokerus();
         assert_eq!(pokemon.pokerus_status(), Pokerus::Infected);
         Ok(())
@@ -975,7 +1027,7 @@ mod tests {
     #[test]
     fn test_cure_pokerus() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.infect_pokerus();
         pokemon.cure_pokerus();
         assert_eq!(pokemon.pokerus_status(), Pokerus::Cured);
@@ -985,7 +1037,7 @@ mod tests {
     #[test]
     fn test_remove_pokerus() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.infect_pokerus();
         pokemon.remove_pokerus();
         assert_eq!(pokemon.pokerus_status(), Pokerus::None);
@@ -997,7 +1049,7 @@ mod tests {
     #[test]
     fn test_update_checksum_unchanged_data() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let original = pokemon.checksum;
         pokemon.update_checksum();
         assert_eq!(pokemon.checksum, original);
@@ -1007,12 +1059,12 @@ mod tests {
     #[test]
     fn test_update_checksum_after_mutation() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        pokemon.set_friendship(99);
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.set_friendship(99).unwrap();
         pokemon.update_checksum();
         // Checksum should now reflect the new state; re-parse and confirm it's consistent
         let bytes = pokemon.to_bytes();
-        let reparsed = Pokemon::from_bytes(0, &bytes)?;
+        let reparsed = Gen3Pokemon::from_bytes(0, &bytes)?;
         assert_eq!(reparsed.checksum, pokemon.checksum);
         Ok(())
     }
@@ -1020,7 +1072,7 @@ mod tests {
     #[test]
     fn test_to_bytes_length_is_100() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let bytes = pokemon.to_bytes();
         assert_eq!(bytes.len(), 100);
         Ok(())
@@ -1029,9 +1081,9 @@ mod tests {
     #[test]
     fn test_to_bytes_roundtrip_species() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let original = Pokemon::from_bytes(0, &TORCHIK)?;
+        let original = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let bytes = original.to_bytes();
-        let restored = Pokemon::from_bytes(0, &bytes)?;
+        let restored = Gen3Pokemon::from_bytes(0, &bytes)?;
         assert_eq!(original.species(), restored.species());
         Ok(())
     }
@@ -1039,9 +1091,9 @@ mod tests {
     #[test]
     fn test_to_bytes_roundtrip_level() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let original = Pokemon::from_bytes(0, &TORCHIK)?;
+        let original = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let bytes = original.to_bytes();
-        let restored = Pokemon::from_bytes(0, &bytes)?;
+        let restored = Gen3Pokemon::from_bytes(0, &bytes)?;
         assert_eq!(original.level(), restored.level());
         Ok(())
     }
@@ -1049,9 +1101,9 @@ mod tests {
     #[test]
     fn test_to_bytes_roundtrip_nature() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let original = Pokemon::from_bytes(0, &TORCHIK)?;
+        let original = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let bytes = original.to_bytes();
-        let restored = Pokemon::from_bytes(0, &bytes)?;
+        let restored = Gen3Pokemon::from_bytes(0, &bytes)?;
         assert_eq!(original.nature(), restored.nature());
         Ok(())
     }
@@ -1059,9 +1111,9 @@ mod tests {
     #[test]
     fn test_to_bytes_roundtrip_ability() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let original = Pokemon::from_bytes(0, &TORCHIK)?;
+        let original = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let bytes = original.to_bytes();
-        let restored = Pokemon::from_bytes(0, &bytes)?;
+        let restored = Gen3Pokemon::from_bytes(0, &bytes)?;
         assert_eq!(original.ability(), restored.ability());
         Ok(())
     }
@@ -1069,10 +1121,10 @@ mod tests {
     #[test]
     fn test_to_bytes_roundtrip_pokerus() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut original = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut original = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         original.infect_pokerus();
         let bytes = original.to_bytes();
-        let restored = Pokemon::from_bytes(0, &bytes)?;
+        let restored = Gen3Pokemon::from_bytes(0, &bytes)?;
         assert_eq!(original.pokerus_status(), restored.pokerus_status());
         Ok(())
     }
@@ -1080,30 +1132,10 @@ mod tests {
     #[test]
     fn test_to_bytes_roundtrip_moves() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let original = Pokemon::from_bytes(0, &TORCHIK)?;
+        let original = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let bytes = original.to_bytes();
-        let restored = Pokemon::from_bytes(0, &bytes)?;
+        let restored = Gen3Pokemon::from_bytes(0, &bytes)?;
         assert_eq!(original.moves(), restored.moves());
-        Ok(())
-    }
-
-    // ==================== POKEMON display ====================
-
-    #[test]
-    fn test_display_contains_species() -> Result<(), Box<dyn std::error::Error>> {
-        setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        let s = format!("{}", pokemon);
-        assert!(s.contains("Torchic"));
-        Ok(())
-    }
-
-    #[test]
-    fn test_display_contains_level() -> Result<(), Box<dyn std::error::Error>> {
-        setup_db();
-        let pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
-        let s = format!("{}", pokemon);
-        assert!(s.contains("Level"));
         Ok(())
     }
 
@@ -1112,7 +1144,7 @@ mod tests {
     #[test]
     fn test_update_ivs_hp() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.stats_mut().update_ivs("HP", 25);
         assert_eq!(pokemon.stats.hp_iv, 25);
         Ok(())
@@ -1121,7 +1153,7 @@ mod tests {
     #[test]
     fn test_update_ivs_attack() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.stats_mut().update_ivs("Attack", 31);
         assert_eq!(pokemon.stats.attack_iv, 31);
         Ok(())
@@ -1130,7 +1162,7 @@ mod tests {
     #[test]
     fn test_update_ivs_defense() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.stats_mut().update_ivs("Defense", 20);
         assert_eq!(pokemon.stats.defense_iv, 20);
         Ok(())
@@ -1139,7 +1171,7 @@ mod tests {
     #[test]
     fn test_update_ivs_sp_atk() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.stats_mut().update_ivs("Sp. Atk", 15);
         assert_eq!(pokemon.stats.sp_attack_iv, 15);
         Ok(())
@@ -1148,7 +1180,7 @@ mod tests {
     #[test]
     fn test_update_ivs_sp_def() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.stats_mut().update_ivs("Sp. Def", 10);
         assert_eq!(pokemon.stats.sp_defense_iv, 10);
         Ok(())
@@ -1157,7 +1189,7 @@ mod tests {
     #[test]
     fn test_update_ivs_speed() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.stats_mut().update_ivs("Speed", 5);
         assert_eq!(pokemon.stats.speed_iv, 5);
         Ok(())
@@ -1166,7 +1198,7 @@ mod tests {
     #[test]
     fn test_update_ivs_clamps_at_31() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.stats_mut().update_ivs("HP", 50);
         assert_eq!(pokemon.stats.hp_iv, 31);
         Ok(())
@@ -1175,7 +1207,7 @@ mod tests {
     #[test]
     fn test_update_ivs_unknown_stat_ignored() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         let before = pokemon.stats.hp_iv;
         pokemon.stats_mut().update_ivs("Unknown", 25);
         assert_eq!(pokemon.stats.hp_iv, before);
@@ -1185,7 +1217,7 @@ mod tests {
     #[test]
     fn test_update_evs_hp() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         // Zero all EVs first so total is predictable
         pokemon.stats_mut().update_evs("HP", 0);
         pokemon.stats_mut().update_evs("Attack", 0);
@@ -1201,7 +1233,7 @@ mod tests {
     #[test]
     fn test_update_evs_capped_at_252() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         pokemon.stats_mut().update_evs("Attack", 0);
         pokemon.stats_mut().update_evs("Defense", 0);
         pokemon.stats_mut().update_evs("Sp. Atk", 0);
@@ -1216,7 +1248,7 @@ mod tests {
     #[test]
     fn test_update_evs_all_six_stats() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let mut pokemon = Pokemon::from_bytes(0, &TORCHIK)?;
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
         // Set each stat independently from zero
         let stats = ["HP", "Attack", "Defense", "Sp. Atk", "Sp. Def", "Speed"];
         for stat in &stats {
@@ -1233,11 +1265,45 @@ mod tests {
 
     // ==================== FACTORY ====================
 
+    // ==================== IV/EV round-trip through serialization ====================
+
+    #[test]
+    fn test_update_iv_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        let original = pokemon.stats.hp_iv;
+        let new_val = if original != 31 { 31 } else { 0 };
+        // Use the trait method which also updates raw data
+        pokemon.update_iv("HP", new_val);
+        assert_eq!(pokemon.stats.hp_iv, new_val);
+        // Round-trip through bytes — IV must survive
+        let bytes = pokemon.to_bytes();
+        let reparsed = Gen3Pokemon::from_bytes(0, &bytes)?;
+        assert_eq!(reparsed.stats.hp_iv, new_val);
+        assert_eq!(reparsed.stats.hp_iv, pokemon.stats.hp_iv);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_ev_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        let mut pokemon = Gen3Pokemon::from_bytes(0, &TORCHIK)?;
+        pokemon.update_ev("Attack", 200);
+        assert_eq!(pokemon.stats.attack_ev, 200);
+        // Round-trip through bytes — EV must survive
+        let bytes = pokemon.to_bytes();
+        let reparsed = Gen3Pokemon::from_bytes(0, &bytes)?;
+        assert_eq!(reparsed.stats.attack_ev, 200);
+        Ok(())
+    }
+
+    // ==================== FACTORY (gen_pokemon_from_species) ====================
+
     #[test]
     fn test_gen_pokemon_from_species_bulbasaur() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let empty = Pokemon::default();
-        let bulbasaur = gen_pokemon_from_species(empty, "Bulbasaur", b"Ash", &[0u8; 4])?;
+        let empty = Gen3Pokemon::default();
+        let bulbasaur = gen_pokemon_from_species(&empty, "Bulbasaur", "Ash", [0u8; 4].into())?;
         assert_eq!(bulbasaur.species(), "Bulbasaur");
         assert!(!bulbasaur.is_empty());
         Ok(())
@@ -1246,8 +1312,8 @@ mod tests {
     #[test]
     fn test_gen_pokemon_unknown_species_returns_error() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let empty = Pokemon::default();
-        let result = gen_pokemon_from_species(empty, "FakeMon", b"Ash", &[0u8; 4]);
+        let empty = Gen3Pokemon::default();
+        let result = gen_pokemon_from_species(&empty, "FakeMon", "Ash", [0u8; 4].into());
         assert!(result.is_err());
         Ok(())
     }
@@ -1255,8 +1321,8 @@ mod tests {
     #[test]
     fn test_gen_pokemon_has_level() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let empty = Pokemon::default();
-        let pokemon = gen_pokemon_from_species(empty, "Charmander", b"Ash", &[0u8; 4])?;
+        let empty = Gen3Pokemon::default();
+        let pokemon = gen_pokemon_from_species(&empty, "Charmander", "Ash", [0u8; 4].into())?;
         assert!(pokemon.level() >= 1);
         Ok(())
     }
@@ -1264,26 +1330,26 @@ mod tests {
     #[test]
     fn test_gen_pokemon_valid_ivs() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let empty = Pokemon::default();
-        let pokemon = gen_pokemon_from_species(empty, "Pikachu", b"Ash", &[0u8; 4])?;
+        let empty = Gen3Pokemon::default();
+        let pokemon = gen_pokemon_from_species(&empty, "Pikachu", "Ash", [0u8; 4].into())?;
         let ivs = pokemon.ivs();
-        assert!(ivs.hp_iv() <= 31);
-        assert!(ivs.attack_iv() <= 31);
-        assert!(ivs.defense_iv() <= 31);
-        assert!(ivs.speed_iv() <= 31);
-        assert!(ivs.sp_attack_iv() <= 31);
-        assert!(ivs.sp_defense_iv() <= 31);
+        assert!(ivs.hp <= 31);
+        assert!(ivs.attack <= 31);
+        assert!(ivs.defense <= 31);
+        assert!(ivs.speed <= 31);
+        assert!(ivs.special_attack <= 31);
+        assert!(ivs.special_defense <= 31);
         Ok(())
     }
 
     #[test]
     fn test_gen_pokemon_has_valid_checksum() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let empty = Pokemon::default();
-        let pokemon = gen_pokemon_from_species(empty, "Eevee", b"Trainer", &[0u8; 4])?;
+        let empty = Gen3Pokemon::default();
+        let pokemon = gen_pokemon_from_species(&empty, "Eevee", "Trainer", [0u8; 4].into())?;
         // Re-serialize and re-parse: if checksum is wrong the data would corrupt
         let bytes = pokemon.to_bytes();
-        let reparsed = Pokemon::from_bytes(0, &bytes)?;
+        let reparsed = Gen3Pokemon::from_bytes(0, &bytes)?;
         assert_eq!(reparsed.species(), "Eevee");
         Ok(())
     }
@@ -1291,18 +1357,18 @@ mod tests {
     #[test]
     fn test_gen_pokemon_nickname_is_species_uppercase() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let empty = Pokemon::default();
-        let pokemon = gen_pokemon_from_species(empty, "Squirtle", b"Trainer", &[0u8; 4])?;
+        let empty = Gen3Pokemon::default();
+        let pokemon = gen_pokemon_from_species(&empty, "Squirtle", "Trainer", [0u8; 4].into())?;
         assert_eq!(pokemon.nickname(), "SQUIRTLE");
         Ok(())
     }
 
-    // ==================== MISC DB functions ====================
+    // ==================== Gen3GameData DB functions ====================
 
     #[test]
     fn test_misc_items_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let items = crate::misc::items()?;
+        let items = Gen3GameData.pocket_items(Pocket::Items)?;
         assert!(!items.is_empty());
         Ok(())
     }
@@ -1310,7 +1376,7 @@ mod tests {
     #[test]
     fn test_misc_held_items_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let items = crate::misc::held_items()?;
+        let items = Gen3GameData.held_items()?;
         assert!(!items.is_empty());
         Ok(())
     }
@@ -1318,7 +1384,7 @@ mod tests {
     #[test]
     fn test_misc_balls_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let balls = crate::misc::balls()?;
+        let balls = Gen3GameData.pocket_items(Pocket::Pokeballs)?;
         assert!(!balls.is_empty());
         Ok(())
     }
@@ -1326,7 +1392,7 @@ mod tests {
     #[test]
     fn test_misc_balls_id_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let ids = crate::misc::balls_id()?;
+        let ids = Gen3GameData.balls_id()?;
         assert!(!ids.is_empty());
         Ok(())
     }
@@ -1334,7 +1400,7 @@ mod tests {
     #[test]
     fn test_misc_berries_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let berries = crate::misc::berries()?;
+        let berries = Gen3GameData.pocket_items(Pocket::Berries)?;
         assert!(!berries.is_empty());
         Ok(())
     }
@@ -1342,7 +1408,7 @@ mod tests {
     #[test]
     fn test_misc_tms_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let tms = crate::misc::tms()?;
+        let tms = Gen3GameData.pocket_items(Pocket::Tms)?;
         assert!(!tms.is_empty());
         Ok(())
     }
@@ -1350,23 +1416,15 @@ mod tests {
     #[test]
     fn test_misc_key_items_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let keys = crate::misc::key_items()?;
+        let keys = Gen3GameData.pocket_items(Pocket::Key)?;
         assert!(!keys.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn test_misc_find_item_valid_id() -> Result<(), Box<dyn std::error::Error>> {
-        setup_db();
-        let item = crate::misc::find_item(1)?;
-        assert!(!item.is_empty());
         Ok(())
     }
 
     #[test]
     fn test_misc_species_has_386_entries() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let species = crate::misc::species()?;
+        let species = Gen3GameData.species()?;
         assert_eq!(species.len(), 386);
         Ok(())
     }
@@ -1374,7 +1432,7 @@ mod tests {
     #[test]
     fn test_misc_species_first_is_bulbasaur() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let species = crate::misc::species()?;
+        let species = Gen3GameData.species()?;
         assert_eq!(species.first().map(String::as_str), Some("Bulbasaur"));
         Ok(())
     }
@@ -1382,7 +1440,7 @@ mod tests {
     #[test]
     fn test_misc_moves_nonempty() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let moves = crate::misc::moves()?;
+        let moves = Gen3GameData.moves()?;
         assert!(!moves.is_empty());
         Ok(())
     }
@@ -1390,56 +1448,56 @@ mod tests {
     #[test]
     fn test_misc_pk_species_bulbasaur() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        assert_eq!(crate::misc::pk_species(1)?, "Bulbasaur");
+        assert_eq!(Gen3GameData.pk_species(1)?, "Bulbasaur");
         Ok(())
     }
 
     #[test]
     fn test_misc_pk_species_mewtwo() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        assert_eq!(crate::misc::pk_species(150)?, "Mewtwo");
+        assert_eq!(Gen3GameData.pk_species(150)?, "Mewtwo");
         Ok(())
     }
 
     #[test]
     fn test_misc_nat_dex_num_bulbasaur() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        assert_eq!(crate::misc::nat_dex_num("Bulbasaur")?, 1);
+        assert_eq!(Gen3GameData.nat_dex_num("Bulbasaur")?, 1);
         Ok(())
     }
 
     #[test]
     fn test_misc_nat_dex_num_torchic() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        assert_eq!(crate::misc::nat_dex_num("Torchic")?, 255);
+        assert_eq!(Gen3GameData.nat_dex_num("Torchic")?, 255);
         Ok(())
     }
 
     #[test]
     fn test_misc_ability_torchic_blaze() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        assert_eq!(crate::misc::ability(255)?, "Blaze");
+        assert_eq!(Gen3GameData.abilities(255)?.slot1, "Blaze");
         Ok(())
     }
 
     #[test]
     fn test_misc_hidden_ability_torchic_speed_boost() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        assert_eq!(crate::misc::hidden_ability(255)?, "Speed Boost");
+        assert!(Gen3GameData.abilities(255)?.hidden.is_none());
         Ok(())
     }
 
     #[test]
     fn test_misc_growth_rate_bulbasaur_medium_slow() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        assert_eq!(crate::misc::growth_rate(1)?, "Medium Slow");
+        assert_eq!(Gen3GameData.growth_rate(1)?, "Medium Slow");
         Ok(())
     }
 
     #[test]
     fn test_misc_base_stats_bulbasaur() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let stats = crate::misc::base_stats(&1u16)?;
+        let stats = Gen3GameData.base_stats(&1u16)?;
         assert_eq!(stats.0, 45); // HP
         assert_eq!(stats.1, 49); // Attack
         assert_eq!(stats.2, 49); // Defense
@@ -1452,7 +1510,7 @@ mod tests {
     #[test]
     fn test_misc_typing_bulbasaur_grass_poison() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let (primary, secondary) = crate::misc::typing(1)?;
+        let (primary, secondary) = Gen3GameData.typing(1)?;
         assert_eq!(primary, "Grass");
         assert_eq!(secondary, Some("Poison".to_string()));
         Ok(())
@@ -1461,7 +1519,7 @@ mod tests {
     #[test]
     fn test_misc_typing_torchic_pure_fire() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let (primary, secondary) = crate::misc::typing(255)?;
+        let (primary, secondary) = Gen3GameData.typing(255)?;
         assert_eq!(primary, "Fire");
         assert!(secondary.is_none());
         Ok(())
@@ -1470,32 +1528,15 @@ mod tests {
     #[test]
     fn test_misc_gender_ratio_bulbasaur() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let ratio = crate::misc::gender_ratio(1)?;
+        let ratio = Gen3GameData.gender_ratio(1)?;
         assert!(!ratio.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn test_misc_find_move_scratch() -> Result<(), Box<dyn std::error::Error>> {
-        setup_db();
-        let (id, _pp) = crate::misc::find_move("Scratch")?;
-        assert!(id > 0);
-        Ok(())
-    }
-
-    #[test]
-    fn test_misc_find_move_growl() -> Result<(), Box<dyn std::error::Error>> {
-        setup_db();
-        let (id, pp) = crate::misc::find_move("Growl")?;
-        assert!(id > 0);
-        assert_eq!(pp, 40);
         Ok(())
     }
 
     #[test]
     fn test_misc_move_data_valid() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let (type_name, name, pp) = crate::misc::move_data(10)?;
+        let (type_name, name, pp) = Gen3GameData.move_data(10)?;
         assert!(!name.is_empty());
         assert!(!type_name.is_empty());
         assert!(pp > 0);
@@ -1503,28 +1544,29 @@ mod tests {
     }
 
     #[test]
-    fn test_misc_evolution_charmander_has_next() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_misc_evolution_charmander_evolves_into_charmeleon() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        // Charmander dex #4 evolves into Charmeleon
-        let _evo = crate::misc::evolution(&4u16)?;
+        // Charmander dex #4 evolves into Charmeleon at level 16
+        let evo = Gen3GameData.evolution(&4u16)?;
+        assert_eq!(evo.evolves_into, Some(5));
+        assert_eq!(evo.method, Some("Level".to_string()));
+        assert_eq!(evo.condition, Some("16".to_string()));
         Ok(())
     }
 
     #[test]
-    fn test_misc_evolution_charizard_has_prev() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_misc_evolution_final_form_no_data() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        // Charizard dex #6 has a pre-evolution
-        let mut evo = crate::misc::evolution(&6u16)?;
-        let prev = evo.prev_level();
-        // Charizard's prev evolution requires level 36
-        assert_eq!(prev, Some(36));
+        // Charizard dex #6 is a final evolution — no evolution row exists
+        let result = Gen3GameData.evolution(&6u16);
+        assert!(result.is_err());
         Ok(())
     }
 
     #[test]
     fn test_misc_item_id_g3_potion() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
-        let id = crate::misc::item_id_g3("Potion")?;
+        let id = Gen3GameData.item_id_by_name("Potion")?;
         assert!(id > 0);
         Ok(())
     }

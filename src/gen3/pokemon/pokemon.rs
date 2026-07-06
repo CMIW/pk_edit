@@ -389,7 +389,7 @@ impl Pokemon for Gen3Pokemon {
 
         self.data.growth.species = id;
 
-        let min = self.lowest_level();
+        let min = Gen3GameData.lowest_level(self.nat_dex_number());
         if min > self.level() {
             self.set_level(min)?;
         }
@@ -654,17 +654,6 @@ impl Pokemon for Gen3Pokemon {
         self.misc_flags & 0b0000_0001 == 1
     }
 
-    fn lowest_level(&self) -> u8 {
-        if self.is_empty() {
-            return 1;
-        }
-        Gen3GameData
-            .evolution(&self.nat_dex_number())
-            .ok()
-            .and_then(|e| e.level_condition())
-            .unwrap_or(1)
-    }
-
     fn to_bytes(&self) -> Vec<u8> {
         self.to_bytes_array().to_vec()
     }
@@ -746,10 +735,30 @@ impl Pokemon for Gen3Pokemon {
 
     fn update_iv(&mut self, stat: &str, value: u16) {
         self.stats.update_ivs(stat, value);
+        let iv = &mut self.data.misc.iv_egg_ability;
+        match stat {
+            "HP" => iv.set_hp_iv(self.stats.hp_iv as u8),
+            "Attack" => iv.set_attack_iv(self.stats.attack_iv as u8),
+            "Defense" => iv.set_defense_iv(self.stats.defense_iv as u8),
+            "Sp. Atk" => iv.set_sp_attack_iv(self.stats.sp_attack_iv as u8),
+            "Sp. Def" => iv.set_sp_defense_iv(self.stats.sp_defense_iv as u8),
+            "Speed" => iv.set_speed_iv(self.stats.speed_iv as u8),
+            _ => {}
+        }
     }
 
     fn update_ev(&mut self, stat: &str, value: u16) {
         self.stats.update_evs(stat, value);
+        let e = &mut self.data.evs;
+        match stat {
+            "HP" => e.hp = self.stats.hp_ev as u8,
+            "Attack" => e.attack = self.stats.attack_ev as u8,
+            "Defense" => e.defense = self.stats.defense_ev as u8,
+            "Sp. Atk" => e.sp_attack = self.stats.sp_attack_ev as u8,
+            "Sp. Def" => e.sp_defense = self.stats.sp_defense_ev as u8,
+            "Speed" => e.speed = self.stats.speed_ev as u8,
+            _ => {}
+        }
     }
 
     fn update_checksum(&mut self) {

@@ -197,7 +197,10 @@ pub const NATURE_MODIFIER: [[f32; 5]; 25] = [
 pub struct Gen3GameData;
 
 impl Gen3GameData {
-    /// Returns the item database IDs for all Pokéballs available in Gen III.
+    /// Returns the item IDs of all Pokéballs available in Gen III.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn balls_id(&self) -> Result<Vec<u16>> {
         let conn = Connection::open("pk_edit.db")?;
 
@@ -219,6 +222,9 @@ impl Gen3GameData {
     }
 
     /// Returns the SV sprite IDs for all Pokéballs available in Gen III.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn balls_sprite_ids(&self) -> Result<Vec<u16>> {
         let conn = Connection::open("pk_edit.db")?;
 
@@ -240,6 +246,9 @@ impl Gen3GameData {
     }
 
     /// Looks up the `id_in_game` for a Gen III item by its English name.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn item_id_by_name(&self, name: &str) -> Result<usize> {
         let conn = Connection::open("pk_edit.db")?;
         let res = conn.query_row(
@@ -252,6 +261,9 @@ impl Gen3GameData {
     }
 
     /// Looks up the SV sprite ID for a Gen III item by its English name.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn item_sprite_id(&self, name: &str) -> Result<usize> {
         let conn = Connection::open("pk_edit.db")?;
         let res = conn.query_row(
@@ -393,19 +405,23 @@ impl GameData for Gen3GameData {
         res
     }
 
-    /// Returns the gender ratio string (e.g. `"50:50"`) for a species by National Dex number.
+    /// Returns the gender ratio string for a species by National Dex number.
     fn gender_ratio(&self, dex_num: u16) -> Result<String> {
         let conn = Connection::open("pk_edit.db")?;
 
-        let res = conn.query_row(
+        let ratio: u8 = conn.query_row(
             "SELECT gender_ratio FROM species WHERE dex_num = ?1 AND game_family = 'gen3'",
             [dex_num],
             |row| row.get(0),
-        );
+        )?;
 
         let _ = conn.close();
 
-        res
+        Ok(match ratio {
+            0 => "Always male".to_string(),
+            255 => "Genderless".to_string(),
+            r => format!("{:.1}% female", r as f64 / 256.0 * 100.0),
+        })
     }
 
     /// Returns the abilities for a species by National Dex number.
@@ -598,5 +614,22 @@ impl GameData for Gen3GameData {
         );
         let _ = conn.close();
         res
+    }
+
+    fn lowest_level(&self, dex_num: u16) -> u8 {
+        let conn = match Connection::open("pk_edit.db") {
+            Ok(c) => c,
+            Err(_) => return 1,
+        };
+        let res = conn.query_row(
+            "SELECT condition FROM evolutions WHERE evolves_into = ?1 AND game_family = 'gen3' AND method = 'Level'",
+            [dex_num],
+            |row| row.get::<_, Option<String>>(0),
+        );
+        let _ = conn.close();
+        res.ok()
+            .flatten()
+            .and_then(|c| c.parse::<u8>().ok())
+            .unwrap_or(1)
     }
 }

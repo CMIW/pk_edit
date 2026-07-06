@@ -8,7 +8,9 @@
 use super::pokemon::Gen3Pokemon;
 use crate::common::types::TrainerID;
 use crate::error::PokemonError;
+use crate::gen3::game_data::Gen3GameData;
 use crate::gen3::pokemon::data::IVsEggAbility;
+use crate::traits::game_data::GameData;
 use crate::traits::pokemon::Pokemon as PokemonTrait;
 use crate::traits::pokemon_factory::PokemonFactory;
 use rand::Rng;
@@ -68,11 +70,12 @@ impl PokemonFactory for Gen3Factory {
 
     fn gen_pokemon_from_species(
         &self,
+        pokemon: &Gen3Pokemon,
         species: &str,
         ot_name: &str,
         ot_id: TrainerID,
     ) -> Result<Gen3Pokemon, PokemonError> {
-        gen_pokemon_from_species(species, ot_name, ot_id)
+        gen_pokemon_from_species(pokemon, species, ot_name, ot_id)
     }
 }
 
@@ -84,6 +87,7 @@ impl PokemonFactory for Gen3Factory {
 /// # Errors
 /// Returns [`PokemonError::UnknownSpecies`] if `species` is not in the Pokédex database.
 pub fn gen_pokemon_from_species(
+    pokemon: &Gen3Pokemon,
     species: &str,
     ot_name: &str,
     ot_id: TrainerID,
@@ -91,11 +95,12 @@ pub fn gen_pokemon_from_species(
     let (pid, ivs) = generate_method_1(None);
 
     let mut new_pokemon = Gen3Pokemon::default();
+    new_pokemon.offset = pokemon.offset;
     new_pokemon.personality_value = pid;
     new_pokemon.data.misc.iv_egg_ability = ivs;
 
     new_pokemon.set_species(species)?;
-    new_pokemon.set_level(new_pokemon.lowest_level())?;
+    new_pokemon.set_level(Gen3GameData.lowest_level(new_pokemon.nat_dex_number()))?;
     new_pokemon.data.misc.origins_info.set_pokeball(4);
     new_pokemon.set_ot_id(&ot_id)?;
     new_pokemon.set_ot_name(ot_name)?;

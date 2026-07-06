@@ -18,28 +18,39 @@ pub struct Section {
 impl Section {
     /// Retrieves the save index for this section.
     /// Every time the game is saved, its Save Index value goes up by one. This is true even when starting a new game: it continues to count up from the previous save. All 14 sections within a game save must have the same Save Index value. The most recent game save will have a greater Save Index value than the previous save.
-    pub(crate) fn save_index(&self, buffer: &[u8]) -> u32 {
-        let section_buffer = &buffer[self.offset..self.offset + self.size];
-        LittleEndian::read_u32(&section_buffer[0x0FFC..])
+    pub(crate) fn save_index(&self, buffer: &[u8]) -> Result<u32, SaveDataError> {
+        let section_buffer = &buffer
+            .get(self.offset..self.offset + self.size)
+            .ok_or(SaveDataError::InvalidOffset(self.offset))?;
+        Ok(LittleEndian::read_u32(&section_buffer[0x0FFC..]))
     }
 
     /// Retrieves the section ID, which identifies the section's purpose (e.g., Trainer Info, PC Buffer A).
-    pub(crate) fn id(&self, buffer: &[u8]) -> SectionID {
-        let section_buffer = &buffer[self.offset..self.offset + self.size];
+    pub(crate) fn id(&self, buffer: &[u8]) -> Result<SectionID, SaveDataError> {
+        let section_buffer = &buffer
+            .get(self.offset..self.offset + self.size)
+            .ok_or(SaveDataError::InvalidOffset(self.offset))?;
         let id = LittleEndian::read_u16(&section_buffer[0x0FF4..0x0FF6]);
-        id.into()
+        Ok(id.into())
     }
 
     /// Reads the data of the section.
-    pub(crate) fn data<'a>(&'a self, buffer: &'a [u8]) -> &'a [u8] {
-        let section_buffer = &buffer[self.offset..self.offset + self.size];
-        &section_buffer[0..SECTION_DATA_SIZE]
+    pub(crate) fn data<'a>(&'a self, buffer: &'a [u8]) -> Result<&'a [u8], SaveDataError> {
+        let section_buffer = buffer
+            .get(self.offset..self.offset + self.size)
+            .ok_or(SaveDataError::InvalidOffset(self.offset))?;
+        Ok(&section_buffer[0..SECTION_DATA_SIZE])
     }
 
     /// Retrieves mutable data of the section.
-    pub(crate) fn data_mut<'a>(&'a self, buffer: &'a mut [u8]) -> &'a mut [u8] {
-        let section_buffer = &mut buffer[self.offset..self.offset + self.size];
-        &mut section_buffer[0..SECTION_DATA_SIZE]
+    pub(crate) fn data_mut<'a>(
+        &'a self,
+        buffer: &'a mut [u8],
+    ) -> Result<&'a mut [u8], SaveDataError> {
+        let section_buffer = buffer
+            .get_mut(self.offset..self.offset + self.size)
+            .ok_or(SaveDataError::InvalidOffset(self.offset))?;
+        Ok(&mut section_buffer[0..SECTION_DATA_SIZE])
     }
 
     pub(crate) fn offset(&self) -> usize {
@@ -54,8 +65,23 @@ impl Section {
     /// -Take the upper 16 bits of the result, and add them to the lower 16 bits of the result.
     /// -This new 16-bit value is the checksum.
     pub(crate) fn write_checksum(&self, buffer: &mut [u8]) -> Result<(), SaveDataError> {
+        let checksum = self.compute_checksum(buffer)?;
+        let section_buffer = &mut buffer
+            .get_mut(self.offset..self.offset + self.size)
+            .ok_or(SaveDataError::InvalidOffset(self.offset + 0x0FF6))?;
+
+        section_buffer[0x0FF6..0x0FF8].copy_from_slice(&checksum.to_le_bytes());
+
+        Ok(())
+    }
+
+    /// Computes the 16-bit checksum over the section data.
+    ///
+    /// Sums all 4-byte chunks (little-endian u32) of the 3968-byte data region,
+    /// then folds the upper 16 bits into the lower 16 bits.
+    pub(crate) fn compute_checksum(&self, buffer: &[u8]) -> Result<u16, SaveDataError> {
         let mut checksum: u32 = 0;
-        let data = self.data(buffer);
+        let data = self.data(buffer)?;
 
         for chunk in data.chunks(4) {
             let (sum, _) = checksum.overflowing_add(LittleEndian::read_u32(chunk));
@@ -64,12 +90,24 @@ impl Section {
 
         // sum opper and lower bits
         let (checksum, _) = ((checksum & 0xFFFF) as u16).overflowing_add((checksum >> 16) as u16);
+        Ok(checksum)
+    }
 
-        let section_buffer = &mut buffer[self.offset..self.offset + self.size];
+    pub(crate) fn validate_checksum(&self, buffer: &[u8]) -> Result<(), SaveDataError> {
+        let section_buffer = buffer
+            .get(self.offset..self.offset + self.size)
+            .ok_or(SaveDataError::InvalidOffset(self.offset))?;
+        let stored = LittleEndian::read_u16(&section_buffer[0x0FF6..0x0FF8]);
+        let computed = self.compute_checksum(buffer)?;
 
-        section_buffer[0x0FF6..0x0FF8].copy_from_slice(&checksum.to_le_bytes());
-
-        Ok(())
+        if stored == computed {
+            Ok(())
+        } else {
+            Err(SaveDataError::ChecksumMismatch {
+                expected: stored,
+                found: computed,
+            })
+        }
     }
 }
 
@@ -93,6 +131,29 @@ pub enum SectionID {
     PCbufferH,
     PCbufferI,
     NA,
+}
+
+impl SectionID {
+    pub fn to_string(&self) -> String {
+        match self {
+            SectionID::TrainerInfo => "TrainerInfo",
+            SectionID::TeamItems => "TeamItems",
+            SectionID::GameState => "GameState",
+            SectionID::MiscData => "MiscData",
+            SectionID::RivalInfo => "RivalInfo",
+            SectionID::PCbufferA => "PCbufferA",
+            SectionID::PCbufferB => "PCbufferB",
+            SectionID::PCbufferC => "PCbufferC",
+            SectionID::PCbufferD => "PCbufferD",
+            SectionID::PCbufferE => "PCbufferE",
+            SectionID::PCbufferF => "PCbufferF",
+            SectionID::PCbufferG => "PCbufferG",
+            SectionID::PCbufferH => "PCbufferH",
+            SectionID::PCbufferI => "PCbufferI",
+            SectionID::NA => "NA",
+        }
+        .to_string()
+    }
 }
 
 impl From<u16> for SectionID {
@@ -135,6 +196,28 @@ impl From<SectionID> for i32 {
             SectionID::PCbufferH => 12,
             SectionID::PCbufferI => 13,
             SectionID::NA => 14,
+        }
+    }
+}
+
+impl std::fmt::Display for SectionID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SectionID::TrainerInfo => write!(f, "TrainerInfo"),
+            SectionID::TeamItems => write!(f, "TeamItems"),
+            SectionID::GameState => write!(f, "GameState"),
+            SectionID::MiscData => write!(f, "MiscData"),
+            SectionID::RivalInfo => write!(f, "RivalInfo"),
+            SectionID::PCbufferA => write!(f, "PCbufferA"),
+            SectionID::PCbufferB => write!(f, "PCbufferB"),
+            SectionID::PCbufferC => write!(f, "PCbufferC"),
+            SectionID::PCbufferD => write!(f, "PCbufferD"),
+            SectionID::PCbufferE => write!(f, "PCbufferE"),
+            SectionID::PCbufferF => write!(f, "PCbufferF"),
+            SectionID::PCbufferG => write!(f, "PCbufferG"),
+            SectionID::PCbufferH => write!(f, "PCbufferH"),
+            SectionID::PCbufferI => write!(f, "PCbufferI"),
+            SectionID::NA => write!(f, "NA"),
         }
     }
 }

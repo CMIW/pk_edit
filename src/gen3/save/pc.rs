@@ -26,12 +26,12 @@ impl PCBuffer {
     /// Creates a new PCBuffer by combining data from the specified sections.
     /// The PCBuffer is constructed by extracting data from the sections that contain the PC data.
     /// Special handling is required for the last section (`PCbufferI`), which may have a different size.
-    pub(crate) fn new(buffer: [Section; 9], data_buffer: &[u8]) -> Self {
+    pub(crate) fn new(buffer: [Section; 9], data_buffer: &[u8]) -> Result<Self, SaveDataError> {
         let mut data: Vec<u8> = vec![];
 
         // deconstruct the pc data from the the pc buffers
         for section in buffer {
-            if section.id(data_buffer) == SectionID::PCbufferI {
+            if section.id(data_buffer)? == SectionID::PCbufferI {
                 data.extend_from_slice(
                     &data_buffer[section.offset..section.offset + PC_BUFFER_I_SECTION_SIZE],
                 );
@@ -42,14 +42,16 @@ impl PCBuffer {
             }
         }
 
-        PCBuffer { buffer, data }
+        Ok(PCBuffer { buffer, data })
     }
 
     /// Retrieves all Pokémon stored in a specific PC box.
     /// Each PC box is a fixed-size chunk of the PC Buffer, containing 30 Pokémon slots.
     pub(crate) fn pc_box(&self, number: usize) -> Result<Vec<Gen3Pokemon>, PokemonError> {
         let mut boxes = self.data[0x0004..0x8344].chunks(2400);
-        let pc = boxes.nth(number).expect("Expected value but found None");
+        let pc = boxes
+            .nth(number)
+            .ok_or(PokemonError::InvalidIndex(number))?;
         let mut list: Vec<Gen3Pokemon> = vec![];
 
         for (i, pokemon) in pc.chunks(80).enumerate() {

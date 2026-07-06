@@ -24,4 +24,7 @@ pub trait GameData {
     fn item_sprite_id(&self, name: &str) -> Self::Result<usize>;
     /// Returns the SV sprite IDs of all Pokéballs available in this generation.
     fn balls_sprite_ids(&self) -> Self::Result<Vec<u16>>;
+    /// Returns the minimum level a Pokémon of the given species can exist at
+    /// (i.e. the level it evolved from its pre-evolution, or 1 if it has no pre-evolution).
+    fn lowest_level(&self, dex_num: u16) -> u8;
 }

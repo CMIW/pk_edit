@@ -94,6 +94,9 @@ pub fn pocket_address(pocket: Pocket, game_code: u32) -> (usize, usize) {
 
 /// Decrypts pocket data using the security key.
 /// Returns a list of (ItemName, Quantity) for every slot, including empty ones as ("Nothing", 0).
+///
+/// # Errors
+/// Returns an error if the data is too short or decryption fails.
 pub fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<(String, u16)>, SaveDataError> {
     let mut pocket = Vec::new();
 
@@ -137,6 +140,9 @@ pub fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<(String, u16
 /// Encrypts pocket data using the security key for saving.
 /// Returns raw bytes ready to be written to Section 1.
 /// "Nothing" entries are written as item_id=0 with quantity=0.
+///
+/// # Errors
+/// This function does not fail, but returns `Result` for compatibility.
 pub fn encrypt_pocket(
     pocket: Vec<(String, u16)>,
     security_key: u16,

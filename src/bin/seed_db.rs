@@ -733,6 +733,184 @@ fn seed_moves(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// Seed: evolutions
+// ---------------------------------------------------------------------------
+
+fn load_veekun_evo_triggers(veekun_root: &Path) -> Result<HashMap<i64, String>> {
+    let path = veekun_root.join("pokedex/data/csv/evolution_triggers.csv");
+    let mut rdr =
+        csv::Reader::from_path(&path).with_context(|| format!("opening {}", path.display()))?;
+    let headers = rdr.headers()?.clone();
+    let col_id = csv_col(&headers, "id")?;
+    let col_ident = csv_col(&headers, "identifier")?;
+
+    let mut map = HashMap::new();
+    for result in rdr.records() {
+        let rec = result?;
+        let id = parse_i64(csv_field(&rec, col_id)?)?;
+        let ident = csv_field(&rec, col_ident)?.to_string();
+        map.insert(id, ident);
+    }
+    Ok(map)
+}
+
+fn load_veekun_evolutions(
+    veekun_root: &Path,
+) -> Result<Vec<(i64, i64, Option<i64>, Option<i64>, Option<i64>)>> {
+    let path = veekun_root.join("pokedex/data/csv/pokemon_evolution.csv");
+    let mut rdr =
+        csv::Reader::from_path(&path).with_context(|| format!("opening {}", path.display()))?;
+    let headers = rdr.headers()?.clone();
+    let col_evo = csv_col(&headers, "evolved_species_id")?;
+    let col_trigger = csv_col(&headers, "evolution_trigger_id")?;
+    let col_item = csv_col(&headers, "trigger_item_id")?;
+    let col_level = csv_col(&headers, "minimum_level")?;
+    let col_held = csv_col(&headers, "held_item_id")?;
+
+    let mut rows = Vec::new();
+    for result in rdr.records() {
+        let rec = result?;
+        let evo_species = parse_i64(csv_field(&rec, col_evo)?)?;
+        let trigger = parse_i64(csv_field(&rec, col_trigger)?)?;
+        let item = parse_opt_i64(csv_field(&rec, col_item)?);
+        let level = parse_opt_i64(csv_field(&rec, col_level)?);
+        let held = parse_opt_i64(csv_field(&rec, col_held)?);
+        rows.push((evo_species, trigger, item, level, held));
+    }
+    Ok(rows)
+}
+
+fn load_veekun_species_evo_from(veekun_root: &Path) -> Result<HashMap<i64, i64>> {
+    let path = veekun_root.join("pokedex/data/csv/pokemon_species.csv");
+    let mut rdr =
+        csv::Reader::from_path(&path).with_context(|| format!("opening {}", path.display()))?;
+    let headers = rdr.headers()?.clone();
+    let col_id = csv_col(&headers, "id")?;
+    let col_evo_from = csv_col(&headers, "evolves_from_species_id")?;
+
+    let mut map = HashMap::new();
+    for result in rdr.records() {
+        let rec = result?;
+        let id = parse_i64(csv_field(&rec, col_id)?)?;
+        let evo_from_str = csv_field(&rec, col_evo_from)?;
+        if let Ok(evo_from) = evo_from_str.parse::<i64>() {
+            map.insert(id, evo_from);
+        }
+    }
+    Ok(map)
+}
+
+fn evo_method_name(trigger_id: i64, trigger_name: &str) -> String {
+    match trigger_id {
+        1 => "Level",
+        2 => "Trade",
+        3 => "Item",
+        4 => "Shed",
+        _ => trigger_name,
+    }
+    .to_string()
+}
+
+fn load_veekun_item_names_map(veekun_root: &Path) -> Result<HashMap<i64, String>> {
+    let path = veekun_root.join("pokedex/data/csv/item_names.csv");
+    let mut rdr =
+        csv::Reader::from_path(&path).with_context(|| format!("opening {}", path.display()))?;
+    let headers = rdr.headers()?.clone();
+    let col_item = csv_col(&headers, "item_id")?;
+    let col_lang = csv_col(&headers, "local_language_id")?;
+    let col_name = csv_col(&headers, "name")?;
+
+    let mut map: HashMap<i64, String> = HashMap::new();
+    for result in rdr.records() {
+        let rec = result?;
+        let item_id = parse_i64(csv_field(&rec, col_item)?)?;
+        let lang_id = parse_i64(csv_field(&rec, col_lang)?)?;
+        if lang_id == 9 {
+            let name = csv_field(&rec, col_name)?.to_string();
+            map.insert(item_id, name);
+        }
+    }
+    Ok(map)
+}
+
+fn evo_condition(
+    trigger_id: i64,
+    item: Option<i64>,
+    level: Option<i64>,
+    held: Option<i64>,
+    item_names: &HashMap<i64, String>,
+) -> Option<String> {
+    match trigger_id {
+        1 => level.map(|l| l.to_string()),
+        3 if item.is_some() => {
+            item.and_then(|i| item_names.get(&i).map(|name| format!("item:{name}")))
+        }
+        2 if held.is_some() => {
+            held.and_then(|h| item_names.get(&h).map(|name| format!("held:{name}")))
+        }
+        _ => None,
+    }
+}
+
+fn seed_evolutions(conn: &Connection, veekun_root: &Path) -> Result<()> {
+    println!("Seeding evolutions...");
+
+    let triggers = load_veekun_evo_triggers(veekun_root)?;
+    let evo_rows = load_veekun_evolutions(veekun_root)?;
+    let species_evo_from = load_veekun_species_evo_from(veekun_root)?;
+    let item_names = load_veekun_item_names_map(veekun_root)?;
+
+    let families = ["gen3", "gen4", "bdsp", "lumi"];
+    let gen3_max_dex: i64 = 386;
+    let gen4_max_dex: i64 = 493;
+    let bdsp_max_dex: i64 = 493;
+    let lumi_max_dex: i64 = 905;
+
+    let mut count: u32 = 0;
+
+    for &(evo_species_id, trigger_id, item, level, held) in &evo_rows {
+        let dex_num = match species_evo_from.get(&evo_species_id) {
+            Some(&from_id) => from_id,
+            None => continue,
+        };
+
+        let method = evo_method_name(
+            trigger_id,
+            triggers
+                .get(&trigger_id)
+                .map(String::as_str)
+                .unwrap_or("unknown"),
+        );
+        let condition = evo_condition(trigger_id, item, level, held, &item_names);
+
+        for gf in &families {
+            let max_dex = match *gf {
+                "gen3" => gen3_max_dex,
+                "gen4" => gen4_max_dex,
+                "bdsp" => bdsp_max_dex,
+                "lumi" => lumi_max_dex,
+                _ => continue,
+            };
+
+            if dex_num > max_dex || evo_species_id > max_dex {
+                continue;
+            }
+
+            conn.execute(
+                "INSERT OR REPLACE INTO evolutions \
+                 (dex_num, game_family, evolves_into, method, condition) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![dex_num, gf, evo_species_id, method, condition,],
+            )?;
+            count += 1;
+        }
+    }
+
+    println!("  {count} evolution rows inserted.");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Seed: items
 // ---------------------------------------------------------------------------
 
@@ -1056,6 +1234,7 @@ fn main() -> Result<()> {
     seed_abilities(&conn, &args.pkhex)?;
     seed_species(&conn, &args.pkhex)?;
     seed_moves(&conn, &args.veekun, &args.pkhex)?;
+    seed_evolutions(&conn, &args.veekun)?;
     seed_items(&conn, &args.veekun, &args.pkhex)?;
 
     println!("Done.");

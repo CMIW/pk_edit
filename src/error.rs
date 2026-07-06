@@ -17,6 +17,9 @@ pub enum DetectError {
     /// No supported format matched the file size or magic bytes.
     #[error("Unknown save format (size {0} bytes)")]
     UnknownFormat(usize),
+    /// A section checksum in the save file is invalid.
+    #[error("Checksum validation failed: {0}")]
+    ChecksumFailed(#[from] SaveDataError),
 }
 
 /// Errors that can occur while parsing or mutating a Pokémon.
@@ -43,6 +46,9 @@ pub enum PokemonError {
     /// The Pokéball ID was outside the valid range (1–12).
     #[error("Invalid pokeball {0} (must be 1-12)")]
     InvalidPokeball(u8),
+    /// Invalid index or out-of-bounds access
+    #[error("Invalid index: {0}")]
+    InvalidIndex(usize),
 }
 
 /// Represents errors that can occur while handling save data.

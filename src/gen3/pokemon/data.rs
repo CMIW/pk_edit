@@ -236,6 +236,8 @@ impl From<u8> for Language {
 impl Evolution {
     /// Returns the level required for this evolution, if the method is `"Level"`.
     pub fn level_condition(&self) -> Option<u8> {
+        println!("Level condition: {:?}", self.condition.as_ref());
+        println!("Method: {:?}", self.method.as_ref());
         if self.method.as_deref() == Some("Level") {
             self.condition.as_ref().and_then(|c| c.parse::<u8>().ok())
         } else {

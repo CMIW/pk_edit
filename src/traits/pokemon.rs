@@ -34,7 +34,6 @@ pub trait Pokemon {
     fn is_egg(&self) -> bool;
     fn is_shiny(&self) -> bool;
     fn is_bad_egg(&self) -> bool;
-    fn lowest_level(&self) -> u8;
     fn to_bytes(&self) -> Vec<u8>;
     /// Returns `true` if this slot holds no Pokémon (i.e. is unoccupied).
     fn is_empty(&self) -> bool;

@@ -19,6 +19,7 @@ pub trait PokemonFactory {
     /// Returns [`PokemonError`] if the species name is not found in the database.
     fn gen_pokemon_from_species(
         &self,
+        pokemon: &Self::Output,
         species: &str,
         ot_name: &str,
         ot_id: TrainerID,
