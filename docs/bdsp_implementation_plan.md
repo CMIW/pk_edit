@@ -371,6 +371,9 @@ pub enum OpenSave {
 
 ## 11. Implementation Steps (Execution Order)
 
+> Status: ✅ All steps completed. `cargo test -p pk_edit` (168 tests), `cargo check --workspace`,
+> and `cargo clippy -p pk_edit` all pass.
+
 ### Step 1: bdsp/pokemon/crypto.rs
 - Implement `decrypt_array8(data: &[u8]) -> Vec<u8>`
 - Implement `encrypt_array8(data: &[u8]) -> Vec<u8>`

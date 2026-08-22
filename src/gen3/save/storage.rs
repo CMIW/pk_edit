@@ -11,6 +11,7 @@ use crate::gen3::save::section::SectionID;
 use byteorder::{ByteOrder, LittleEndian};
 use std::fmt;
 
+use crate::common::types::BagItem;
 use crate::error::SaveDataError;
 use rusqlite::Connection;
 
@@ -59,6 +60,41 @@ impl fmt::Display for Pocket {
     }
 }
 
+impl From<Pocket> for crate::common::types::Pocket {
+    fn from(pocket: Pocket) -> Self {
+        match pocket {
+            Pocket::Items => Self::Items,
+            Pocket::Pokeballs => Self::Balls,
+            Pocket::Berries => Self::Berries,
+            Pocket::Tms => Self::TMs,
+            Pocket::Key => Self::Key,
+        }
+    }
+}
+
+impl TryFrom<crate::common::types::Pocket> for Pocket {
+    type Error = SaveDataError;
+
+    /// Maps a cross-generation pocket onto its Gen III equivalent.
+    ///
+    /// # Errors
+    /// Returns [`SaveDataError::Unexpected`] for pockets Gen III does not have
+    /// (Medicine, Mail, Battle, and Treasure).
+    fn try_from(pocket: crate::common::types::Pocket) -> Result<Self, Self::Error> {
+        use crate::common::types::Pocket as Common;
+        match pocket {
+            Common::Items => Ok(Self::Items),
+            Common::Balls => Ok(Self::Pokeballs),
+            Common::Berries => Ok(Self::Berries),
+            Common::TMs => Ok(Self::Tms),
+            Common::Key => Ok(Self::Key),
+            other => Err(SaveDataError::Unexpected(format!(
+                "Generation III has no {other} pocket"
+            ))),
+        }
+    }
+}
+
 /// Helper to determine the memory offset range for a specific pocket based on the Game Code.
 /// Returns (start_offset, end_offset) within Section 1.
 pub fn pocket_address(pocket: Pocket, game_code: u32) -> (usize, usize) {
@@ -93,11 +129,12 @@ pub fn pocket_address(pocket: Pocket, game_code: u32) -> (usize, usize) {
 }
 
 /// Decrypts pocket data using the security key.
-/// Returns a list of (ItemName, Quantity) for every slot, including empty ones as ("Nothing", 0).
+///
+/// Returns every slot in order, including unoccupied ones as [`BagItem::empty`].
 ///
 /// # Errors
 /// Returns an error if the data is too short or decryption fails.
-pub fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<(String, u16)>, SaveDataError> {
+pub fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<BagItem>, SaveDataError> {
     let mut pocket = Vec::new();
 
     for chunk in data.chunks(4) {
@@ -116,59 +153,70 @@ pub fn decrypt_pocket(data: &[u8], security_key: u16) -> Result<Vec<(String, u16
 
         let quantity = encrypted_quantity ^ security_key;
 
-        if item_id != 0 {
-            let item_name = Connection::open("pk_edit.db")
-                .ok()
-                .and_then(|conn| {
-                    conn.query_row(
-                        "SELECT name_en FROM items WHERE id_in_game = ?1 AND game_family = 'gen3'",
-                        [item_id as usize],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .ok()
-                })
-                .unwrap_or_else(|| format!("Unknown Item ({})", item_id));
-            pocket.push((item_name, quantity));
-        } else {
-            pocket.push((String::from("Nothing"), 0));
+        if item_id == 0 {
+            pocket.push(BagItem::empty());
+            continue;
         }
+
+        let name = Connection::open("pk_edit.db")
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    "SELECT name_en FROM items WHERE id_in_game = ?1 AND game_family = 'gen3'",
+                    [item_id as usize],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            })
+            .unwrap_or_else(|| format!("Unknown Item ({item_id})"));
+
+        pocket.push(BagItem {
+            id: item_id,
+            name,
+            quantity,
+        });
     }
 
     Ok(pocket)
 }
 
 /// Encrypts pocket data using the security key for saving.
-/// Returns raw bytes ready to be written to Section 1.
-/// "Nothing" entries are written as item_id=0 with quantity=0.
+///
+/// Returns raw bytes ready to be written to Section 1. Empty slots are written
+/// as `item_id = 0` with a quantity of zero.
+///
+/// Entries carrying an `id` of zero but a real name — which the UI produces when
+/// the user picks an item from a dropdown — are resolved by name as a fallback.
 ///
 /// # Errors
 /// This function does not fail, but returns `Result` for compatibility.
-pub fn encrypt_pocket(
-    pocket: Vec<(String, u16)>,
-    security_key: u16,
-) -> Result<Vec<u8>, SaveDataError> {
+pub fn encrypt_pocket(pocket: Vec<BagItem>, security_key: u16) -> Result<Vec<u8>, SaveDataError> {
     let mut encrypted_data = Vec::new();
 
-    for (item_name, quantity) in pocket {
-        if item_name == "Nothing" {
+    for entry in pocket {
+        if entry.is_empty() {
             encrypted_data.extend(&0u16.to_le_bytes());
             encrypted_data.extend(&0u16.to_le_bytes());
             continue;
         }
 
-        let item_id: u16 = Connection::open("pk_edit.db")
-            .ok()
-            .and_then(|conn| {
-                conn.query_row(
-                    "SELECT id_in_game FROM items WHERE name_en = ?1 AND game_family = 'gen3'",
-                    [item_name.as_str()],
-                    |row| row.get::<_, u16>(0),
-                )
+        let item_id = if entry.id != 0 {
+            entry.id
+        } else {
+            Connection::open("pk_edit.db")
                 .ok()
-            })
-            .unwrap_or(0);
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT id_in_game FROM items WHERE name_en = ?1 AND game_family = 'gen3'",
+                        [entry.name.as_str()],
+                        |row| row.get::<_, u16>(0),
+                    )
+                    .ok()
+                })
+                .unwrap_or(0)
+        };
 
-        let encrypted_quantity = quantity ^ security_key;
+        let encrypted_quantity = entry.quantity ^ security_key;
 
         encrypted_data.extend(&item_id.to_le_bytes());
         encrypted_data.extend(&encrypted_quantity.to_le_bytes());

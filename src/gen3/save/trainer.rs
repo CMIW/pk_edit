@@ -92,6 +92,35 @@ pub struct GymBadges {
     pub badge_8: B1, // Rain (RS/E) / Earth (FRLG)
 }
 
+impl GymBadges {
+    /// Returns the number of obtained gym badges (0–8).
+    pub fn count(&self) -> u8 {
+        [
+            self.badge_1(), self.badge_2(), self.badge_3(), self.badge_4(),
+            self.badge_5(), self.badge_6(), self.badge_7(), self.badge_8(),
+        ]
+        .iter()
+        .map(|badge| u8::from(*badge != 0))
+        .sum()
+    }
+
+    /// Returns the earned badges as a bitmask where bit `N` (0-indexed) is set
+    /// when badge `N + 1` has been obtained.
+    pub fn flags(&self) -> u8 {
+        let bits = [
+            self.badge_1(), self.badge_2(), self.badge_3(), self.badge_4(),
+            self.badge_5(), self.badge_6(), self.badge_7(), self.badge_8(),
+        ];
+        bits.iter().enumerate().fold(0u8, |mask, (i, &badge)| {
+            if badge != 0 {
+                mask | (1 << i)
+            } else {
+                mask
+            }
+        })
+    }
+}
+
 /// A high-level representation of the Trainer's metadata.
 /// This aggregates data that is physically split between Section 0 (Info) and Section 1 (Money) in the save file.
 #[derive(Debug, Clone)]
@@ -103,4 +132,40 @@ pub struct Trainer {
     pub money: u32,
     pub game_version: GameVersion,
     pub security_key: u32, // Kept for debugging/reference
+}
+
+impl From<crate::common::types::Trainer> for Trainer {
+    fn from(trainer: crate::common::types::Trainer) -> Self {
+        Trainer {
+            name: trainer.name,
+            gender: trainer.gender,
+            id: trainer.id,
+            time_played: TimePlayed {
+                hours: trainer.time_played.hours,
+                minutes: trainer.time_played.minutes,
+                seconds: trainer.time_played.seconds,
+                frames: trainer.time_played.frames,
+            },
+            money: trainer.money,
+            game_version: GameVersion::Emerald,
+            security_key: 0,
+        }
+    }
+}
+
+impl From<Trainer> for crate::common::types::Trainer {
+    fn from(trainer: Trainer) -> Self {
+        crate::common::types::Trainer {
+            name: trainer.name,
+            gender: trainer.gender,
+            id: trainer.id,
+            time_played: crate::common::types::TimePlayed {
+                hours: trainer.time_played.hours,
+                minutes: trainer.time_played.minutes,
+                seconds: trainer.time_played.seconds,
+                frames: trainer.time_played.frames,
+            },
+            money: trainer.money,
+        }
+    }
 }

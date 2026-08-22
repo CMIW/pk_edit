@@ -50,8 +50,46 @@ pub enum StorageType {
     None,
 }
 
-/// One of the five bag pockets in a Gen III save file.
-#[derive(Debug, Copy, Clone, PartialEq)]
+/// A single entry in a bag pocket.
+///
+/// The `id` is the item's in-game index and is the entry's true identity.
+/// Distinct IDs can share a display `name` — Luminescent, for example, lists
+/// "Poké Ball" under IDs 4, 1622, 1640 and 1710 — so code that saves a pocket
+/// must round-trip the `id` rather than resolving entries by `name`.
+///
+/// Generation III pockets are fixed-length and represent an empty slot with
+/// `id == 0` and the placeholder name `"Nothing"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BagItem {
+    pub id: u16,
+    pub name: String,
+    pub quantity: u16,
+}
+
+impl BagItem {
+    /// Name used for an unoccupied Generation III slot.
+    pub const EMPTY_NAME: &'static str = "Nothing";
+
+    /// Returns an empty Generation III slot.
+    pub fn empty() -> Self {
+        Self {
+            id: 0,
+            name: Self::EMPTY_NAME.to_string(),
+            quantity: 0,
+        }
+    }
+
+    /// Returns `true` if this entry represents an empty slot.
+    pub fn is_empty(&self) -> bool {
+        self.id == 0 || self.name == Self::EMPTY_NAME
+    }
+}
+
+/// Bag pocket categories across all generations.
+///
+/// Not every generation has every pocket. Use [`Pocket::GEN3`] or
+/// [`Pocket::BDSP`] for the set a given game actually presents.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Pocket {
     /// Regular items (Potions, Repels, etc.).
     Items,
@@ -67,8 +105,76 @@ pub enum Pocket {
     Mail,
     /// Battle items (Gen IV+).
     Battle,
+    /// Valuables and fossils held for selling or trading (BDSP/Lumi).
+    Treasure,
     /// Key Items (cannot be discarded).
     Key,
+}
+
+impl std::fmt::Display for Pocket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl Pocket {
+    /// Gen III pockets, in bag tab order.
+    pub const GEN3: &'static [Pocket] = &[
+        Pocket::Items,
+        Pocket::Balls,
+        Pocket::Berries,
+        Pocket::TMs,
+        Pocket::Key,
+    ];
+
+    /// BDSP / Lumi pockets, in bag tab order.
+    pub const BDSP: &'static [Pocket] = &[
+        Pocket::Items,
+        Pocket::Medicine,
+        Pocket::Balls,
+        Pocket::Berries,
+        Pocket::TMs,
+        Pocket::Battle,
+        Pocket::Treasure,
+        Pocket::Key,
+    ];
+
+    /// Returns the `pocket` column value used in the items database table.
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Pocket::Items => "items",
+            Pocket::Medicine => "medicine",
+            Pocket::Balls => "balls",
+            Pocket::TMs => "tms",
+            Pocket::Berries => "berries",
+            Pocket::Mail => "mail",
+            Pocket::Battle => "battle",
+            Pocket::Treasure => "treasure",
+            Pocket::Key => "key",
+        }
+    }
+
+    /// Returns the display label for this pocket.
+    pub fn label(self) -> &'static str {
+        match self {
+            Pocket::Items => "Items",
+            Pocket::Medicine => "Medicine",
+            Pocket::Balls => "Poké Balls",
+            Pocket::TMs => "TMs & HMs",
+            Pocket::Berries => "Berries",
+            Pocket::Mail => "Mail",
+            Pocket::Battle => "Battle",
+            Pocket::Treasure => "Treasure",
+            Pocket::Key => "Key Items",
+        }
+    }
+
+    /// Returns `true` if items in this pocket have a meaningful quantity.
+    ///
+    /// Key Items are one-of-a-kind and have no stack count.
+    pub fn has_quantity(self) -> bool {
+        self != Pocket::Key
+    }
 }
 
 /// A Pokémon's gender as derived from `PID % 256` and the species gender ratio.

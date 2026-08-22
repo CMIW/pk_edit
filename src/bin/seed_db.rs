@@ -22,7 +22,10 @@
 //!   differences are not modelled.
 //! - Veekun covers Gen I–VI moves only. Gen VII–IX moves are seeded with
 //!   names only (stats NULL).
-//! - Item pocket assignment uses Veekun's canonical pocket mapping.
+//! - Item pocket assignment is generation-aware: BDSP and Lumi use PKHeX's
+//!   per-game `Pouch_*` arrays (parsed from `ItemStorage8BDSP.cs` and
+//!   `ItemStorage8BDSPLumi.cs`), which include the Treasure pocket. Gen III and
+//!   Gen IV fall back to Veekun's canonical pocket mapping.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -55,6 +58,7 @@ CREATE TABLE IF NOT EXISTS abilities (
 );
 CREATE TABLE IF NOT EXISTS species (
     dex_num        INTEGER NOT NULL,
+    form           INTEGER NOT NULL DEFAULT 0,
     game_family    TEXT    NOT NULL,
     name_en        TEXT    NOT NULL,
     name_zh        TEXT, name_ja TEXT, name_fr TEXT,
@@ -73,7 +77,7 @@ CREATE TABLE IF NOT EXISTS species (
     gender_ratio   INTEGER NOT NULL,
     growth_rate    TEXT    NOT NULL,
     id_in_game     INTEGER NOT NULL,
-    PRIMARY KEY (dex_num, game_family)
+    PRIMARY KEY (dex_num, form, game_family)
 );
 CREATE TABLE IF NOT EXISTS moves (
     id_in_game  INTEGER NOT NULL,
@@ -96,6 +100,7 @@ CREATE TABLE IF NOT EXISTS items (
     pocket      TEXT    NOT NULL,
     holdable    INTEGER NOT NULL,
     sprite_id   INTEGER,
+    flavor_text TEXT,
     PRIMARY KEY (id_in_game, game_family)
 );
 CREATE TABLE IF NOT EXISTS evolutions (
@@ -255,6 +260,8 @@ struct PersonalEntry {
     ability1: u16,
     ability2: Option<u16>,
     hidden_ability: Option<u16>,
+    form_count: u8,
+    form_stats_index: u16,
 }
 
 fn parse_gen3(data: &[u8]) -> Result<PersonalEntry> {
@@ -274,6 +281,8 @@ fn parse_gen3(data: &[u8]) -> Result<PersonalEntry> {
         ability1,
         ability2: (a2 != 0 && a2 != ability1).then_some(a2),
         hidden_ability: None,
+        form_count: 1,
+        form_stats_index: 0,
     })
 }
 
@@ -294,6 +303,8 @@ fn parse_gen4(data: &[u8]) -> Result<PersonalEntry> {
         ability1,
         ability2: (a2 != 0 && a2 != ability1).then_some(a2),
         hidden_ability: None,
+        form_count: 1,
+        form_stats_index: 0,
     })
 }
 
@@ -303,6 +314,8 @@ fn parse_bdsp(data: &[u8]) -> Result<PersonalEntry> {
     let ability_h = read_u16_le_at(data, 0x1C)?;
     // PokeDexIndex at 0x42 is the Sinnoh regional dex number — metadata only,
     // not used as dex_num. The array index is the national dex number.
+    // FormStatsIndex (u16 @ 0x1E) points at the personal-table row of Form 1;
+    // FormCount (byte @ 0x20) is the total number of forms including base.
     Ok(PersonalEntry {
         hp: read_u8_at(data, 0x00)?,
         atk: read_u8_at(data, 0x01)?,
@@ -318,6 +331,8 @@ fn parse_bdsp(data: &[u8]) -> Result<PersonalEntry> {
         ability2: (ability2 != 0 && ability2 != ability1).then_some(ability2),
         hidden_ability: (ability_h != 0 && ability_h != ability1 && ability_h != ability2)
             .then_some(ability_h),
+        form_stats_index: read_u16_le_at(data, 0x1E)?,
+        form_count: read_u8_at(data, 0x20)?,
     })
 }
 
@@ -347,6 +362,55 @@ fn veekun_lang(local_language_id: i64) -> Option<&'static str> {
         7 => Some("es"),
         8 => Some("it"),
         3 => Some("ko"),
+        _ => None,
+    }
+}
+
+/// Maps a PKHeX Gen III item name to its modern Veekun equivalent.
+///
+/// Gen III used compressed, apostrophe-free, or since-renamed item names
+/// (`BlackGlasses`, `Parlyz Heal`, `Itemfinder`). Veekun keys metadata — pocket,
+/// holdable flag, flavor text, sprite ID — by the modern name, so the join fails
+/// unless we translate first. The value stored in `name_en` remains the
+/// authentic Gen III name; only the lookup key is canonicalised.
+fn canonical_gen3_item_name(name: &str) -> &str {
+    match name {
+        "BlackGlasses" => "Black Glasses",
+        "BrightPowder" => "Bright Powder",
+        "DeepSeaScale" => "Deep Sea Scale",
+        "DeepSeaTooth" => "Deep Sea Tooth",
+        "EnergyPowder" => "Energy Powder",
+        "NeverMeltIce" => "Never-Melt Ice",
+        "SilverPowder" => "Silver Powder",
+        "TinyMushroom" => "Tiny Mushroom",
+        "TwistedSpoon" => "Twisted Spoon",
+        "Parlyz Heal" => "Paralyze Heal",
+        "X Defend" => "X Defense",
+        // Gen III had a single Special stat; the modern split maps it to Sp. Atk.
+        "X Special" => "X Sp. Atk",
+        "Up-Grade" => "Upgrade",
+        "Itemfinder" => "Dowsing Machine",
+        "Stick" => "Leek",
+        "King's Rock" => "King\u{2019}s Rock",
+        other => other,
+    }
+}
+
+/// Returns a Gen III-accurate flavor text override for an item, if one is needed.
+///
+/// Some Gen III items were remapped to a differently-scoped modern item by
+/// [`canonical_gen3_item_name`], which correctly resolves pocket/sprite metadata
+/// but pulls in flavor text describing the *modern* item. Override those here so
+/// the description matches the item's actual Gen III behaviour. Only affects the
+/// Gen III rows; other generations keep their own accurate text.
+fn gen3_flavor_override(name: &str) -> Option<&'static str> {
+    match name {
+        // Gen III's single "Special" stat covers both Sp. Atk and Sp. Def; the
+        // canonical match to "X Sp. Atk" would otherwise imply Sp. Atk only.
+        "X Special" => Some(
+            "An item that sharply boosts the Special stat of a Pokémon during a \
+             battle. It wears off once the Pokémon is withdrawn.",
+        ),
         _ => None,
     }
 }
@@ -539,51 +603,120 @@ fn seed_species(conn: &Connection, pkhex_root: &Path) -> Result<()> {
                 continue;
             }
 
-            let type2 = (entry.type2 != entry.type1).then(|| i64::from(entry.type2));
-            let growth = growth_rate_name(entry.growth_rate);
             let id_in_game = i64::try_from(i).context("id_in_game overflow")?;
 
-            conn.execute(
-                "INSERT OR REPLACE INTO species \
-                 (dex_num, game_family, name_en, name_zh, name_ja, name_fr, \
-                  name_de, name_es, name_it, name_ko, \
-                  type1, type2, hp, atk, def, spa, spd, spe, \
-                  ability1, ability2, hidden_ability, \
-                  gender_ratio, growth_rate, id_in_game) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,\
-                         ?11,?12,?13,?14,?15,?16,?17,?18,\
-                         ?19,?20,?21,?22,?23,?24)",
-                params![
-                    dex_num,
-                    cfg.game_family,
-                    n.en,
-                    n.zh,
-                    n.ja,
-                    n.fr,
-                    n.de,
-                    n.es,
-                    n.it,
-                    n.ko,
-                    i64::from(entry.type1),
-                    type2,
-                    i64::from(entry.hp),
-                    i64::from(entry.atk),
-                    i64::from(entry.def),
-                    i64::from(entry.spa),
-                    i64::from(entry.spd),
-                    i64::from(entry.spe),
-                    i64::from(entry.ability1),
-                    entry.ability2.map(i64::from),
-                    entry.hidden_ability.map(i64::from),
-                    i64::from(entry.gender_ratio),
-                    growth,
-                    id_in_game,
-                ],
-            )?;
+            insert_species_row(conn, cfg.game_family, dex_num, 0, id_in_game, &n, &entry)?;
             count += 1;
+
+            // Emit one row per alternate form for BDSP/Lumi. The form entries
+            // live at FormStatsIndex..FormStatsIndex+FormCount-1 in the same
+            // personal table; each has its own stats/types/abilities.
+            if cfg.entry_size == 0x44 && entry.form_count > 1 {
+                for form in 1..entry.form_count {
+                    let form_idx =
+                        usize::from(entry.form_stats_index) + usize::from(form - 1);
+                    let f_start = form_idx * cfg.entry_size;
+                    let f_end = f_start + cfg.entry_size;
+                    let Some(form_slice) = data.get(f_start..f_end) else {
+                        continue;
+                    };
+                    let form_entry = (cfg.parse)(form_slice)?;
+                    insert_species_row(
+                        conn,
+                        cfg.game_family,
+                        dex_num,
+                        i64::from(form),
+                        id_in_game,
+                        &n,
+                        &form_entry,
+                    )?;
+                    count += 1;
+                }
+            }
         }
+
+        // Gen 3 Unown has 28 PID-derived letters. They share stats/types/name;
+        // only the form index differs. Copy the base row into forms 1..28.
+        if cfg.game_family == "gen3" {
+            for form in 1..28i64 {
+                conn.execute(
+                    "INSERT OR REPLACE INTO species \
+                     (dex_num, form, game_family, name_en, name_zh, name_ja, name_fr, \
+                      name_de, name_es, name_it, name_ko, \
+                      type1, type2, hp, atk, def, spa, spd, spe, \
+                      ability1, ability2, hidden_ability, \
+                      gender_ratio, growth_rate, id_in_game) \
+                     SELECT dex_num, ?1, game_family, name_en, name_zh, name_ja, name_fr, \
+                            name_de, name_es, name_it, name_ko, \
+                            type1, type2, hp, atk, def, spa, spd, spe, \
+                            ability1, ability2, hidden_ability, \
+                            gender_ratio, growth_rate, id_in_game \
+                     FROM species WHERE dex_num = 201 AND form = 0 AND game_family = 'gen3'",
+                    params![form],
+                )?;
+                count += 1;
+            }
+        }
+
         println!("  {}: {count} species rows inserted.", cfg.game_family);
     }
+    Ok(())
+}
+
+/// Inserts (or replaces) a single row into the `species` table.
+///
+/// Factored out so alternate-form entries share the exact column list and
+/// derivation used for the base entry.
+fn insert_species_row(
+    conn: &Connection,
+    game_family: &str,
+    dex_num: i64,
+    form: i64,
+    id_in_game: i64,
+    names: &Names,
+    entry: &PersonalEntry,
+) -> Result<()> {
+    let type2 = (entry.type2 != entry.type1).then(|| i64::from(entry.type2));
+    let growth = growth_rate_name(entry.growth_rate);
+
+    conn.execute(
+        "INSERT OR REPLACE INTO species \
+         (dex_num, form, game_family, name_en, name_zh, name_ja, name_fr, \
+          name_de, name_es, name_it, name_ko, \
+          type1, type2, hp, atk, def, spa, spd, spe, \
+          ability1, ability2, hidden_ability, \
+          gender_ratio, growth_rate, id_in_game) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,\
+                 ?11,?12,?13,?14,?15,?16,?17,?18,\
+                 ?19,?20,?21,?22,?23,?24,?25)",
+        params![
+            dex_num,
+            form,
+            game_family,
+            names.en,
+            names.zh,
+            names.ja,
+            names.fr,
+            names.de,
+            names.es,
+            names.it,
+            names.ko,
+            i64::from(entry.type1),
+            type2,
+            i64::from(entry.hp),
+            i64::from(entry.atk),
+            i64::from(entry.def),
+            i64::from(entry.spa),
+            i64::from(entry.spd),
+            i64::from(entry.spe),
+            i64::from(entry.ability1),
+            entry.ability2.map(i64::from),
+            entry.hidden_ability.map(i64::from),
+            i64::from(entry.gender_ratio),
+            growth,
+            id_in_game,
+        ],
+    )?;
     Ok(())
 }
 
@@ -833,6 +966,34 @@ fn load_veekun_item_names_map(veekun_root: &Path) -> Result<HashMap<i64, String>
     Ok(map)
 }
 
+fn load_veekun_item_flavor_text(veekun_root: &Path) -> Result<HashMap<i64, String>> {
+    // item_flavor_text.csv: item_id, version_group_id, language_id, flavor_text
+    // Use the latest version_group (20 = Gen VII) and English (language_id = 9).
+    let path = veekun_root.join("pokedex/data/csv/item_flavor_text.csv");
+    let mut rdr =
+        csv::Reader::from_path(&path).with_context(|| format!("opening {}", path.display()))?;
+    let headers = rdr.headers()?.clone();
+    let col_item = csv_col(&headers, "item_id")?;
+    let col_vg = csv_col(&headers, "version_group_id")?;
+    let col_lang = csv_col(&headers, "language_id")?;
+    let col_text = csv_col(&headers, "flavor_text")?;
+
+    let mut map: HashMap<i64, String> = HashMap::new();
+    for result in rdr.records() {
+        let rec = result?;
+        let item_id = parse_i64(csv_field(&rec, col_item)?)?;
+        let vg = parse_i64(csv_field(&rec, col_vg)?)?;
+        let lang_id = parse_i64(csv_field(&rec, col_lang)?)?;
+        if lang_id == 9 && vg >= 20 {
+            let raw = csv_field(&rec, col_text)?.to_string();
+            // Veekun flavor text uses literal \n and Form Feed; normalize.
+            let cleaned = raw.replace('\u{000C}', " ").replace('\n', " ");
+            map.entry(item_id).or_insert(cleaned);
+        }
+    }
+    Ok(map)
+}
+
 fn evo_condition(
     trigger_id: i64,
     item: Option<i64>,
@@ -913,6 +1074,77 @@ fn seed_evolutions(conn: &Connection, veekun_root: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Seed: items
 // ---------------------------------------------------------------------------
+
+/// Maps a PKHeX `Pouch_*` C# field name to the `pocket` column value.
+fn pkhex_pouch_pocket(field: &str) -> Option<&'static str> {
+    // Field names look like `Pouch_Regular_BS` / `Pouch_Key_Lumi`.
+    let core = field.strip_prefix("Pouch_")?;
+    let core = core.rsplit_once('_').map_or(core, |(head, _)| head);
+    match core {
+        "Regular" => Some("items"),
+        "Medicine" => Some("medicine"),
+        "Ball" => Some("balls"),
+        "TMHM" => Some("tms"),
+        "Berries" => Some("berries"),
+        "Battle" => Some("battle"),
+        "Treasure" => Some("treasure"),
+        "Key" => Some("key"),
+        _ => None,
+    }
+}
+
+/// Parses the `Pouch_*` arrays out of a PKHeX `ItemStorage*.cs` file.
+///
+/// Each array is a C# `ReadOnlySpan<ushort>` collection expression of decimal
+/// item IDs. Returns `item_id → pocket`. Later pouches do not override earlier
+/// ones, matching PKHeX's `GetInventoryPouch` first-match-wins lookup order.
+fn load_pkhex_pouches(pkhex_root: &Path, file: &str) -> Result<HashMap<i64, &'static str>> {
+    let path = pkhex_root.join("PKHeX.Core/Items").join(file);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+
+    let mut map: HashMap<i64, &'static str> = HashMap::new();
+    let mut current: Option<&'static str> = None;
+
+    for raw in text.lines() {
+        // Strip `//` comments so commented-out IDs are ignored.
+        let line = raw.split_once("//").map_or(raw, |(code, _)| code);
+
+        if let Some(idx) = line.find("Pouch_") {
+            let field: String = line
+                .get(idx..)
+                .unwrap_or_default()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            // `=>` marks a declaration; a bare mention is a reference elsewhere.
+            if line.contains("=>") {
+                current = pkhex_pouch_pocket(&field);
+                continue;
+            }
+        }
+
+        let Some(pocket) = current else { continue };
+
+        for token in line.split(|c: char| !c.is_ascii_digit()) {
+            if token.is_empty() {
+                continue;
+            }
+            let id: i64 = token.parse().context("pouch item id")?;
+            map.entry(id).or_insert(pocket);
+        }
+
+        // Closing brace ends the current pouch (after its IDs were parsed).
+        if line.contains("};") || line.contains("];") {
+            current = None;
+        }
+    }
+
+    if map.is_empty() {
+        bail!("no pouch entries parsed from {}", path.display());
+    }
+    Ok(map)
+}
 
 fn load_veekun_item_meta(
     veekun_root: &Path,
@@ -1038,6 +1270,12 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
     let (cat_pocket, item_cat, holdable) = load_veekun_item_meta(veekun_root)?;
     let veekun_names = load_veekun_item_names(veekun_root)?;
     let game_indices = load_veekun_game_indices(veekun_root)?;
+    let flavor_text = load_veekun_item_flavor_text(veekun_root)?;
+
+    // Authoritative per-game pocket assignment from PKHeX pouch arrays.
+    // `id_in_game → pocket`, keyed by that game's own item indices.
+    let bdsp_pouches = load_pkhex_pouches(pkhex_root, "ItemStorage8BDSP.cs")?;
+    let lumi_pouches = load_pkhex_pouches(pkhex_root, "ItemStorage8BDSPLumi.cs")?;
 
     // Build reverse map: en_name → veekun_item_id (for name-based matching)
     let name_to_veekun: HashMap<&str, i64> = veekun_names
@@ -1063,7 +1301,7 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
         .get("en")
         .iter()
         .flat_map(|v| v.iter().enumerate().skip(1))
-        .filter(|(_, name)| !name.is_empty() && !matches!(name.as_str(), "(None)" | "---"))
+        .filter(|(_, name)| !name.is_empty() && !matches!(name.as_str(), "(None)" | "---" | "???"))
         .map(|(idx, name)| (name.as_str(), idx))
         .rev()
         .collect();
@@ -1073,20 +1311,26 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
     // --- Gen III: PKHeX gen3 array, name-match Veekun for pocket/holdable ---
     let en_g3 = gen3_names.get("en").cloned().unwrap_or_default();
     for (idx, en_name) in en_g3.iter().enumerate().skip(1) {
-        if en_name.is_empty() || matches!(en_name.as_str(), "(None)" | "---") {
+        if en_name.is_empty() || matches!(en_name.as_str(), "(None)" | "---" | "???") {
             continue;
         }
         let id_in_game = i64::try_from(idx).context("gen3 item id overflow")?;
-        let veekun_id = name_to_veekun.get(en_name.as_str()).copied();
+        // Match Veekun metadata using the modern name, but store the Gen III name.
+        let lookup_name = canonical_gen3_item_name(en_name);
+        let veekun_id = name_to_veekun.get(lookup_name).copied();
         let (pocket, holdable_flag) =
             item_pocket_holdable(veekun_id, &cat_pocket, &item_cat, &holdable);
-        let sprite_id = name_to_sv_id.get(en_name.as_str()).map(|&i| i as i64);
+        let sprite_id = name_to_sv_id.get(lookup_name).map(|&i| i as i64);
         let n = get_names(&gen3_names, idx);
+        // Prefer a Gen III-specific override where a renamed item's modern flavor
+        // text would misdescribe the original behaviour.
+        let ft = gen3_flavor_override(en_name)
+            .or_else(|| veekun_id.and_then(|id| flavor_text.get(&id)).map(String::as_str));
         conn.execute(
             "INSERT OR REPLACE INTO items \
              (id_in_game, game_family, name_en, name_zh, name_ja, name_fr, \
-              name_de, name_es, name_it, name_ko, pocket, holdable, sprite_id) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+              name_de, name_es, name_it, name_ko, pocket, holdable, sprite_id, flavor_text) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 id_in_game,
                 "gen3",
@@ -1101,6 +1345,7 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
                 pocket,
                 holdable_flag,
                 sprite_id,
+                ft,
             ],
         )?;
         count += 1;
@@ -1108,14 +1353,19 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
 
     // --- Gen IV (gen_id=4) and BDSP (gen_id=8): Veekun game indices ---
     for (gf, gen_id) in [("gen4", 4_i64), ("bdsp", 8_i64)] {
+        // BDSP pocket layout comes from PKHeX; Gen IV falls back to Veekun.
+        let pouches = (gf == "bdsp").then_some(&bdsp_pouches);
         let mut seen: HashSet<i64> = HashSet::new();
         for ((item_id, gid), &game_index) in &game_indices {
             if *gid != gen_id || !seen.insert(game_index) {
                 continue;
             }
             let veekun_id = Some(*item_id);
-            let (pocket, holdable_flag) =
+            let (veekun_pocket_name, holdable_flag) =
                 item_pocket_holdable(veekun_id, &cat_pocket, &item_cat, &holdable);
+            let pocket = pouches
+                .and_then(|p| p.get(&game_index).copied())
+                .unwrap_or(veekun_pocket_name);
 
             // Build names: Veekun first, fill gaps from PKHeX global array
             let vnames = veekun_names.get(item_id);
@@ -1138,12 +1388,13 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
             };
 
             let sprite_id = name_to_sv_id.get(n.en.as_str()).map(|&i| i as i64);
+            let ft = flavor_text.get(item_id).map(String::as_str);
 
             conn.execute(
                 "INSERT OR REPLACE INTO items \
                  (id_in_game, game_family, name_en, name_zh, name_ja, name_fr, \
-                  name_de, name_es, name_it, name_ko, pocket, holdable, sprite_id) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                  name_de, name_es, name_it, name_ko, pocket, holdable, sprite_id, flavor_text) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
                 params![
                     game_index,
                     gf,
@@ -1158,6 +1409,7 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
                     pocket,
                     holdable_flag,
                     sprite_id,
+                    ft,
                 ],
             )?;
             count += 1;
@@ -1167,20 +1419,26 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
     // --- Lumi: PKHeX LUMI array, name-match Veekun for pocket/holdable ---
     let en_lumi = lumi_names.get("en").cloned().unwrap_or_default();
     for (idx, en_name) in en_lumi.iter().enumerate().skip(1) {
-        if en_name.is_empty() || matches!(en_name.as_str(), "(None)" | "---") {
+        if en_name.is_empty() || matches!(en_name.as_str(), "(None)" | "---" | "???") {
             continue;
         }
         let id_in_game = i64::try_from(idx).context("lumi item id overflow")?;
         let veekun_id = name_to_veekun.get(en_name.as_str()).copied();
-        let (pocket, holdable_flag) =
+        let (veekun_pocket_name, holdable_flag) =
             item_pocket_holdable(veekun_id, &cat_pocket, &item_cat, &holdable);
+        // Lumi pocket layout comes from PKHeX's own pouch arrays.
+        let pocket = lumi_pouches
+            .get(&id_in_game)
+            .copied()
+            .unwrap_or(veekun_pocket_name);
         let sprite_id = name_to_sv_id.get(en_name.as_str()).map(|&i| i as i64);
         let n = get_names(&lumi_names, idx);
+        let ft = veekun_id.and_then(|id| flavor_text.get(&id)).map(String::as_str);
         conn.execute(
             "INSERT OR REPLACE INTO items \
              (id_in_game, game_family, name_en, name_zh, name_ja, name_fr, \
-              name_de, name_es, name_it, name_ko, pocket, holdable, sprite_id) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+              name_de, name_es, name_it, name_ko, pocket, holdable, sprite_id, flavor_text) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 id_in_game,
                 "lumi",
@@ -1195,6 +1453,7 @@ fn seed_items(conn: &Connection, veekun_root: &Path, pkhex_root: &Path) -> Resul
                 pocket,
                 holdable_flag,
                 sprite_id,
+                ft,
             ],
         )?;
         count += 1;

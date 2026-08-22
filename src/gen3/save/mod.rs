@@ -66,6 +66,7 @@ use self::storage::{
 };
 use self::trainer::TimePlayed;
 use crate::common::charset::gen3::{get_char, get_code};
+use crate::common::types::BagItem;
 use crate::common::types::Gender;
 use crate::common::types::TrainerID;
 use crate::error::{PokemonError, SaveDataError};
@@ -136,11 +137,11 @@ impl SaveFile {
 
         save.init_pc_buffer()?;
 
-        for section in &save.game_save_a {
-            section.validate_checksum(&save.data)?;
-        }
-
-        for section in &save.game_save_b {
+        // Only validate the most recent save block. The older backup block
+        // may contain stale or partially-written sections (e.g. 0xFFFF
+        // checksums from unwritten flash), so we skip it.
+        let current = save.current_save()?.to_vec();
+        for section in &current {
             section.validate_checksum(&save.data)?;
         }
 
@@ -357,7 +358,7 @@ impl SaveFile {
     ///
     /// # Errors
     /// Returns an error if the pocket data is invalid or write fails.
-    pub fn pocket(&self, pocket: Pocket) -> Result<Vec<(String, u16)>, SaveDataError> {
+    pub fn pocket(&self, pocket: Pocket) -> Result<Vec<BagItem>, SaveDataError> {
         let game_code = self.game_code()?;
         let (start, end) = pocket_address(pocket, game_code);
         self.read_pocket(start, end)
@@ -373,7 +374,7 @@ impl SaveFile {
     pub fn save_pocket(
         &mut self,
         pocket_type: Pocket,
-        pocket_list: Vec<(String, u16)>,
+        pocket_list: Vec<BagItem>,
     ) -> Result<(), SaveDataError> {
         let game_code = self.game_code()?;
         let security_key = self.security_key_lower()?;
@@ -391,7 +392,7 @@ impl SaveFile {
         Ok(())
     }
 
-    fn read_pocket(&self, start: usize, end: usize) -> Result<Vec<(String, u16)>, SaveDataError> {
+    fn read_pocket(&self, start: usize, end: usize) -> Result<Vec<BagItem>, SaveDataError> {
         let security_key = self.security_key_lower()?;
 
         let section = self
@@ -632,28 +633,162 @@ impl SaveFile {
     }
 
     /// Internal helper to find the badge byte offset within Section 0 (Trainer Info).
-    fn badge_offset(&self) -> Result<usize, SaveDataError> {
+    /// Returns a single event flag from the Large buffer.
+    ///
+    /// Event flags are stored in the Large buffer (Sections 1–4).
+    /// Each flag is a single bit at a specific byte+bit position.
+    fn get_event_flag(&self, flag_number: u16) -> Result<bool, SaveDataError> {
         let game_code = self.game_code()?;
 
-        // The Badges are a single byte located in Section 0.
-        // Offsets vary significantly by version:
-        // 0 = Ruby/Sapphire
-        // 1 = FireRed/LeafGreen
-        // Others = Emerald
+        let event_flag_base: usize = match game_code {
+            0 => 0x1220, // Ruby/Sapphire
+            1 => 0xEE0,  // FireRed/LeafGreen
+            _ => 0x1270, // Emerald
+        };
 
-        match game_code {
-            0 => Ok(0x0239), // Ruby/Sapphire
-            1 => Ok(0x02B3), // FireRed/LeafGreen
-            _ => Ok(0x0249), // Emerald
-        }
+        // GameState section = section 2 = offset 0xF80 in the Large buffer.
+        let gs_start: usize = 0xF80;
+
+        let byte_in_large = event_flag_base + (flag_number as usize / 8);
+        let bit = flag_number as usize % 8;
+
+        // Convert Large offset to GameState section local offset
+        let local_offset = byte_in_large
+            .checked_sub(gs_start)
+            .ok_or(SaveDataError::InvalidOffset(byte_in_large))?;
+
+        let section = self
+            .get_section(SectionID::GameState)
+            .ok_or(SaveDataError::SectionNotFound(
+                "GameState".to_string(),
+            ))?;
+
+        let data = section.data(&self.data)?;
+        let byte = *data.get(local_offset).ok_or(SaveDataError::InvalidOffset(local_offset))?;
+
+        Ok(byte & (1 << bit) != 0)
     }
 
-    /// Retrieves the Gym Badges flags.
+    /// Sets a single event flag in the GameState section.
+    fn set_event_flag(&mut self, flag_number: u16, value: bool) -> Result<(), SaveDataError> {
+        let game_code = self.game_code()?;
+
+        let event_flag_base: usize = match game_code {
+            0 => 0x1220, // Ruby/Sapphire
+            1 => 0xEE0,  // FireRed/LeafGreen
+            _ => 0x1270, // Emerald
+        };
+
+        let gs_start: usize = 0xF80;
+
+        let byte_in_large = event_flag_base + (flag_number as usize / 8);
+        let bit = flag_number as usize % 8;
+
+        let local_offset = byte_in_large
+            .checked_sub(gs_start)
+            .ok_or(SaveDataError::InvalidOffset(byte_in_large))?;
+
+        let section = self
+            .get_section(SectionID::GameState)
+            .ok_or(SaveDataError::SectionNotFound(
+                "GameState".to_string(),
+            ))?;
+
+        let data = section.data_mut(&mut self.data)?;
+
+        let byte = data
+            .get_mut(local_offset)
+            .ok_or(SaveDataError::InvalidOffset(local_offset))?;
+
+        if value {
+            *byte |= 1 << bit;
+        } else {
+            *byte &= !(1 << bit);
+        }
+
+        section.write_checksum(&mut self.data)?;
+
+        Ok(())
+    }
+
+    /// Retrieves the Gym Badges flags by reading individual event flags.
     ///
     /// # Errors
-    /// Returns an error if the TrainerInfo section is missing or write fails.
+    /// Returns an error if the GameState section is missing or data is invalid.
     pub fn badges(&self) -> Result<GymBadges, SaveDataError> {
-        let offset = self.badge_offset()?;
+        let game_code = self.game_code()?;
+
+        let badge_flag_start: u16 = match game_code {
+            0 => 0x807, // Ruby/Sapphire
+            1 => 0x820, // FireRed/LeafGreen
+            _ => 0x867, // Emerald
+        };
+
+        let mut badges = GymBadges::default();
+        let flags = [
+            badge_flag_start,
+            badge_flag_start + 1,
+            badge_flag_start + 2,
+            badge_flag_start + 3,
+            badge_flag_start + 4,
+            badge_flag_start + 5,
+            badge_flag_start + 6,
+            badge_flag_start + 7,
+        ];
+
+        if self.get_event_flag(flags[0])? { badges.set_badge_1(1); }
+        if self.get_event_flag(flags[1])? { badges.set_badge_2(1); }
+        if self.get_event_flag(flags[2])? { badges.set_badge_3(1); }
+        if self.get_event_flag(flags[3])? { badges.set_badge_4(1); }
+        if self.get_event_flag(flags[4])? { badges.set_badge_5(1); }
+        if self.get_event_flag(flags[5])? { badges.set_badge_6(1); }
+        if self.get_event_flag(flags[6])? { badges.set_badge_7(1); }
+        if self.get_event_flag(flags[7])? { badges.set_badge_8(1); }
+
+        Ok(badges)
+    }
+
+    /// Writes the Gym Badges flags and updates the checksum.
+    ///
+    /// # Errors
+    /// Returns an error if the GameState section is missing.
+    pub fn set_badges(&mut self, badges: GymBadges) -> Result<(), SaveDataError> {
+        let game_code = self.game_code()?;
+
+        let badge_flag_start: u16 = match game_code {
+            0 => 0x807, // Ruby/Sapphire
+            1 => 0x820, // FireRed/LeafGreen
+            _ => 0x867, // Emerald
+        };
+
+        let flag_values = [
+            badges.badge_1(),
+            badges.badge_2(),
+            badges.badge_3(),
+            badges.badge_4(),
+            badges.badge_5(),
+            badges.badge_6(),
+            badges.badge_7(),
+            badges.badge_8(),
+        ];
+
+        for (i, &value) in flag_values.iter().enumerate() {
+            self.set_event_flag(badge_flag_start + i as u16, value != 0)?;
+        }
+
+        Ok(())
+    }
+
+    /// Reads the caught/seen Pokédex counts.
+    ///
+    /// # Errors
+    /// Returns an error if the TrainerInfo section is missing.
+    pub fn pokedex(&self) -> Result<(u16, u16), SaveDataError> {
+        const POKEDEX_OFFSET: usize = 0x18;
+        const CAUGHT_OFFSET: usize = POKEDEX_OFFSET + 0x10;
+        const SEEN_OFFSET: usize = POKEDEX_OFFSET + 0x44;
+        const NATIONAL_DEX_COUNT: usize = 386;
+        const DEX_FLAG_BYTES: usize = NATIONAL_DEX_COUNT / 8 + 1;
 
         let section = self
             .get_section(SectionID::TrainerInfo)
@@ -661,43 +796,25 @@ impl SaveFile {
 
         let data = section.data(&self.data)?;
 
-        if offset >= data.len() {
-            return Err(SaveDataError::InvalidOffset(offset));
-        }
+        let count_flags = |offset: usize| -> Result<u16, SaveDataError> {
+            let flags = data
+                .get(offset..offset + DEX_FLAG_BYTES)
+                .ok_or(SaveDataError::InvalidOffset(offset))?;
+            Ok(flags
+                .iter()
+                .enumerate()
+                .flat_map(|(byte_index, byte)| {
+                    let max_bit = if byte_index == DEX_FLAG_BYTES - 1 {
+                        NATIONAL_DEX_COUNT % 8
+                    } else {
+                        8
+                    };
+                    (0..max_bit).map(move |bit| u16::from(byte & (1 << bit) != 0))
+                })
+                .sum())
+        };
 
-        Ok(GymBadges::from_bytes([*data
-            .get(offset)
-            .ok_or(SaveDataError::InvalidOffset(offset))?]))
-    }
-
-    /// Writes the Gym Badges flags and updates the checksum.
-    ///
-    /// # Errors
-    /// Returns an error if the TeamItems section is missing.
-    pub fn set_badges(&mut self, badges: GymBadges) -> Result<(), SaveDataError> {
-        let offset = self.badge_offset()?;
-
-        let section = self
-            .get_section(SectionID::TrainerInfo)
-            .ok_or(SaveDataError::SectionNotFound("TrainerInfo".to_string()))?;
-
-        // Mutable access to Section 0
-        let data = section.data_mut(&mut self.data)?;
-
-        if offset >= data.len() {
-            return Err(SaveDataError::InvalidOffset(offset));
-        }
-
-        let badges_data = data
-            .get_mut(offset)
-            .ok_or(SaveDataError::InvalidOffset(offset))?;
-
-        *badges_data = badges.into_bytes()[0];
-
-        // Update Checksum for Section 0
-        section.write_checksum(&mut self.data)?;
-
-        Ok(())
+        Ok((count_flags(CAUGHT_OFFSET)?, count_flags(SEEN_OFFSET)?))
     }
 
     /// Reads the current number of Pokémon in the party.

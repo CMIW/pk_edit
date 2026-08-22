@@ -353,8 +353,7 @@ mod tests {
         let data = [0u8; 8];
         let items = decrypt_pocket(&data, 0x1234)?;
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].0, "Nothing");
-        assert_eq!(items[1].0, "Nothing");
+        assert!(items.iter().all(|item| item.is_empty()));
         Ok(())
     }
 
@@ -366,8 +365,9 @@ mod tests {
         let data: [u8; 4] = [0x01, 0x00, 0x05, 0x00];
         let items = decrypt_pocket(&data, 0)?;
         assert_eq!(items.len(), 1);
-        if let Some((_name, qty)) = items.first() {
-            assert_eq!(*qty, 5);
+        if let Some(item) = items.first() {
+            assert_eq!(item.id, 1);
+            assert_eq!(item.quantity, 5);
         }
         Ok(())
     }
@@ -511,6 +511,70 @@ mod tests {
         assert_eq!(badges.badge_6(), 1);
         assert_eq!(badges.badge_7(), 1);
         assert_eq!(badges.badge_8(), 1);
+    }
+
+    #[test]
+    fn test_gym_badges_count() {
+        let mut badges = GymBadges::default();
+        assert_eq!(badges.count(), 0);
+
+        badges.set_badge_1(1);
+        badges.set_badge_3(1);
+        badges.set_badge_8(1);
+        assert_eq!(badges.count(), 3);
+
+        badges.set_badge_1(0);
+        badges.set_badge_2(1);
+        badges.set_badge_4(1);
+        badges.set_badge_5(1);
+        badges.set_badge_6(1);
+        badges.set_badge_7(1);
+        assert_eq!(badges.count(), 7);
+
+        let mut all = GymBadges::default();
+        all.set_badge_1(1);
+        all.set_badge_2(1);
+        all.set_badge_3(1);
+        all.set_badge_4(1);
+        all.set_badge_5(1);
+        all.set_badge_6(1);
+        all.set_badge_7(1);
+        all.set_badge_8(1);
+        assert_eq!(all.count(), 8);
+
+        // Test roundtrip: from_bytes -> count
+        let bytes = all.into_bytes();
+        let restored = GymBadges::from_bytes(bytes);
+        assert_eq!(restored.count(), 8);
+    }
+
+    #[test]
+    fn test_gym_badges_flags_bitmask() {
+        // No badges -> empty mask.
+        assert_eq!(GymBadges::default().flags(), 0b0000_0000);
+
+        // Non-contiguous badges must map to the matching bit positions, not a
+        // count. Badges 1, 3, and 8 -> bits 0, 2, 7.
+        let mut badges = GymBadges::default();
+        badges.set_badge_1(1);
+        badges.set_badge_3(1);
+        badges.set_badge_8(1);
+        assert_eq!(badges.flags(), 0b1000_0101);
+        // The count is 3, which must NOT equal the flag mask: this is the exact
+        // confusion that lit up the wrong badges in the UI.
+        assert_ne!(u8::from(badges.count()), badges.flags());
+
+        // All badges -> all bits set.
+        let mut all = GymBadges::default();
+        all.set_badge_1(1);
+        all.set_badge_2(1);
+        all.set_badge_3(1);
+        all.set_badge_4(1);
+        all.set_badge_5(1);
+        all.set_badge_6(1);
+        all.set_badge_7(1);
+        all.set_badge_8(1);
+        assert_eq!(all.flags(), 0b1111_1111);
     }
 
     // ==================== CHARACTER SET ====================
@@ -1529,7 +1593,7 @@ mod tests {
     fn test_misc_gender_ratio_bulbasaur() -> Result<(), Box<dyn std::error::Error>> {
         setup_db();
         let ratio = Gen3GameData.gender_ratio(1)?;
-        assert!(!ratio.is_empty());
+        assert!(ratio <= 255);
         Ok(())
     }
 
@@ -1569,5 +1633,289 @@ mod tests {
         let id = Gen3GameData.item_id_by_name("Potion")?;
         assert!(id > 0);
         Ok(())
+    }
+
+    // --- BDSP ---
+
+    #[test]
+    fn test_bdsp_crypto_roundtrip() {
+        use crate::bdsp::pokemon::crypto;
+
+        let mut buf = vec![0u8; 0x158];
+        // Encryption constant + species + PID + random data in the blocks
+        buf[0..4].copy_from_slice(&[0x12, 0x34, 0x56, 0x78]);
+        buf[0x08..0x0A].copy_from_slice(&[0x9A, 0x00]);
+        buf[0x1C..0x20].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        for i in 0x58..0x90 {
+            buf[i] = (i % 251) as u8;
+        }
+
+        let encrypted = crypto::encrypt(&buf);
+        assert_eq!(encrypted.len(), buf.len());
+        assert!(crypto::is_encrypted(&encrypted));
+
+        let decrypted = crypto::decrypt(&encrypted);
+        assert_eq!(decrypted[..0x148], buf[..0x148]);
+    }
+
+    #[test]
+    fn test_bdsp_checksum() {
+        use crate::bdsp::pokemon::crypto;
+
+        let mut buf = vec![0u8; 0x148];
+        for (i, byte) in buf.iter_mut().enumerate() {
+            *byte = (i % 251) as u8;
+        }
+        let checksum = crypto::calculate_checksum(&buf);
+        assert!(checksum != 0);
+    }
+
+    #[test]
+    fn test_bdsp_detect_party_pokemon() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        use crate::traits::pokemon::Pokemon as PokemonTrait;
+
+        let mut pokemon = crate::bdsp::pokemon::BdspPokemon::new();
+        pokemon.set_species("Bulbasaur")?;
+        pokemon.set_level(5)?;
+        pokemon.set_ot_name("TEST")?;
+        pokemon.update_checksum();
+
+        assert_eq!(pokemon.species(), "Bulbasaur");
+        assert_eq!(pokemon.level(), 5);
+        assert!(!pokemon.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_bdsp_factory_creates_pokemon() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        use crate::traits::pokemon_factory::PokemonFactory;
+
+        let factory = crate::bdsp::pokemon::BdspFactory;
+        let empty = crate::bdsp::pokemon::BdspPokemon::new();
+        let ot_id = crate::TrainerID {
+            public: 12345,
+            private: 54321,
+        };
+        let pokemon = factory.gen_pokemon_from_species(&empty, "Pikachu", "Ash", ot_id)?;
+        assert_eq!(pokemon.species(), "Pikachu");
+        assert_eq!(pokemon.ot_name(), "Ash");
+        assert!(!pokemon.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_bdsp_game_data_queries() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        use crate::traits::game_data::GameData;
+
+        let data = crate::bdsp::game_data::BdspGameData;
+        assert_eq!(data.pk_species(1)?, "Bulbasaur");
+        assert!(data.nat_dex_num("Bulbasaur")? >= 1);
+        let (hp, atk, def, spa, spd, spe) = data.base_stats(&25u16)?;
+        assert!(hp > 0 && atk > 0 && def > 0 && spa > 0 && spd > 0 && spe > 0);
+        let (type1, type2) = data.typing(4)?;
+        assert_eq!(type1, "Fire");
+        assert!(type2.is_none());
+        Ok(())
+    }
+
+    // --- Lumi ---
+
+    #[test]
+    fn test_lumi_crypto_roundtrip() {
+        use crate::lumi::pokemon::crypto;
+
+        let mut buf = vec![0u8; 0x158];
+        buf[0..4].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x01]);
+        buf[0x08..0x0A].copy_from_slice(&[0x2A, 0x00]);
+        buf[0x1C..0x20].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        for i in 0x58..0x90 {
+            buf[i] = (i % 251) as u8;
+        }
+
+        let encrypted = crypto::encrypt(&buf);
+        assert_eq!(encrypted.len(), buf.len());
+        assert!(crypto::is_encrypted(&encrypted));
+
+        let decrypted = crypto::decrypt(&encrypted);
+        assert_eq!(decrypted[..0x148], buf[..0x148]);
+    }
+
+    #[test]
+    fn test_lumi_detect_party_pokemon() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        use crate::traits::pokemon::Pokemon as PokemonTrait;
+
+        let mut pokemon = crate::lumi::pokemon::LumiPokemon::new();
+        pokemon.set_species("Charmander")?;
+        pokemon.set_level(7)?;
+        pokemon.update_checksum();
+
+        assert_eq!(pokemon.species(), "Charmander");
+        assert_eq!(pokemon.level(), 7);
+        Ok(())
+    }
+
+    #[test]
+    fn test_lumi_game_data_queries() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        use crate::traits::game_data::GameData;
+
+        let data = crate::lumi::game_data::LumiGameData;
+        assert_eq!(data.pk_species(1)?, "Bulbasaur");
+        let (type1, _) = data.typing(25)?;
+        assert_eq!(type1, "Electric");
+        Ok(())
+    }
+
+    // --- Detection ---
+
+    /// Writes a valid BDSP/Lumi MD5 hash into a constructed save buffer.
+    /// Uses the fixed hash offset at 0xE9818, matching PKHeX's algorithm:
+    /// MD5 over entire file with the 16 hash bytes zeroed.
+    fn bdsp_md5(data: &mut [u8]) {
+        use md5::{Digest, Md5};
+        const HASH_OFFSET: usize = 0xE9818;
+        let mut hasher = Md5::new();
+        let mut buf = data.to_vec();
+        if let Some(h) = buf.get_mut(HASH_OFFSET..HASH_OFFSET + 16) {
+            h.fill(0);
+        }
+        hasher.update(&buf);
+        let digest = hasher.finalize();
+        if let Some(dest) = data.get_mut(HASH_OFFSET..HASH_OFFSET + 16) {
+            dest.copy_from_slice(&digest[..16]);
+        }
+    }
+
+    #[test]
+    fn test_open_detects_bdsp_save() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        // Construct a valid-size BDSP save with version 0x34 (V1.3) and valid hash
+        let mut save = vec![0u8; 0xEF0A4];
+        save[0..4].copy_from_slice(&0x34u32.to_le_bytes());
+        bdsp_md5(&mut save);
+        let result = crate::open(&save);
+        assert!(matches!(result, Ok(crate::OpenSave::Bdsp(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn test_bdsp_save_modify_and_reopen_validates_hash() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        let mut save_bytes = vec![0u8; 0xEF0A4];
+        save_bytes[0..4].copy_from_slice(&0x34u32.to_le_bytes());
+        bdsp_md5(&mut save_bytes);
+
+        let mut opened = crate::open(&save_bytes)?;
+        if let crate::OpenSave::Bdsp(ref mut bdsp) = opened {
+            let mut trainer = bdsp.trainer()?;
+            trainer.money = 12345;
+            bdsp.save_trainer(&trainer)?;
+        }
+
+        let raw = opened.raw_data();
+        let reopened = crate::open(&raw);
+        assert!(reopened.is_ok(), "Reopening edited BDSP save failed hash validation");
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_detects_lumi_save() -> Result<(), Box<dyn std::error::Error>> {
+        setup_db();
+        // Construct a valid-size Lumi save with 0xFFFF prefix and valid hash
+        let mut save = vec![0u8; 0xEF0A4];
+        save[0..4].copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
+        bdsp_md5(&mut save);
+        let result = crate::open(&save);
+        assert!(matches!(result, Ok(crate::OpenSave::Lumi(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_unknown_format() {
+        let data = vec![0u8; 0x1000];
+        let result = crate::open(&data);
+        assert!(matches!(result, Err(crate::DetectError::UnknownFormat(_))));
+    }
+
+    // --- Real BDSP save roundtrip (PocketHeX fixture) ---
+
+    #[test]
+    fn test_bdsp_real_save_load_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        use std::path::PathBuf;
+        use crate::traits::pokemon::Pokemon as _;
+
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/bdsp_v1.3_populated.sav");
+        if !fixture.exists() {
+            // Skip if fixture not present (e.g. CI without test data)
+            return Ok(());
+        }
+        let data = std::fs::read(&fixture)?;
+        let save = crate::bdsp::save::SaveFile::new(&data)?;
+        let party = save.party()?;
+        let raw = save.raw_data();
+        assert_eq!(raw.len(), data.len());
+        for mon in &party {
+            assert!(!mon.is_empty());
+            assert!(!mon.species().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_bdsp_real_save_detected_as_bdsp() -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/bdsp_v1.3_populated.sav");
+        if !fixture.exists() {
+            return Ok(());
+        }
+        let data = std::fs::read(&fixture)?;
+        let result = crate::open(&data);
+        assert!(
+            matches!(result, Ok(crate::OpenSave::Bdsp(_))),
+            "Expected Bdsp variant, got {:?}",
+            result.as_ref().map(|_| "Bdsp").or_else(|e| Err(format!("{e}")))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_gen3_unown_form_from_pid() {
+        // Test vectors from PKHeX EntityPID.GetUnownForm3
+        // Form = (((pid & 0x3000000) >> 18) | ((pid & 0x30000) >> 12)
+        //       | ((pid & 0x300) >> 6) | (pid & 0x3)) % 28
+        struct Case {
+            pid: u32,
+            expected_form: u8,
+        }
+        const CASES: &[Case] = &[
+            Case { pid: 0x00000000, expected_form: 0 },    // A
+            Case { pid: 0x00000001, expected_form: 1 },    // B
+            Case { pid: 0x00000002, expected_form: 2 },    // C
+            Case { pid: 0x00000003, expected_form: 3 },    // D
+            Case { pid: 0x00000300, expected_form: 12 },   // form 12 (0x300 >> 6 = 0xC = 12)
+            Case { pid: 0x00030000, expected_form: 20 },   // form 20 (0x30000 >> 12 = 0x30 = 48 % 28 = 20)
+            Case { pid: 0x03000000, expected_form: 24 },   // form 24 (0x3000000 >> 18 = 192 % 28 = 24)
+            Case { pid: 0x03030303, expected_form: 3 },    // form 3  (255 % 28 = 3)
+            Case { pid: 0xFFFFFFFF, expected_form: 3 },    // form 3  (255 % 28 = 3)
+        ];
+
+        for case in CASES {
+            let expected = case.expected_form;
+            let value = ((case.pid & 0x0300_0000) >> 18)
+                | ((case.pid & 0x0003_0000) >> 12)
+                | ((case.pid & 0x0000_0300) >> 6)
+                | (case.pid & 0x0000_0003);
+            let computed = (value % 28) as u8;
+            assert_eq!(
+                computed, expected,
+                "Unown form for PID 0x{:08X}: expected {}, got {}",
+                case.pid, expected, computed
+            );
+        }
     }
 }

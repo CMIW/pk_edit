@@ -9,6 +9,7 @@
 //! The database is embedded in the binary via `include_bytes!` and must be extracted to the
 //! working directory with [`extract_db`] before any query functions can be used.
 
+use crate::common::item_flavor_text_for;
 use crate::common::types::Abilities;
 use crate::common::types::Evolution;
 use crate::common::types::Pocket;
@@ -34,15 +35,33 @@ pub const SPECIES: [u16; 136] = [
 ///
 /// Each entry is `(threshold, ratio_string)`. A Pokémon is female when `PID % 256 < threshold`.
 /// The special value 255 means genderless; 254 means always female.
-pub const GENDER_THRESHOLD: [(u32, &str); 8] = [
-    (255, "Genderless"),
-    (254, "0:100"),
-    (225, "12.5:87.5"),
-    (191, "75:25"),
-    (127, "50:50"),
-    (63, "25:75"),
-    (31, "87.5:12.5"),
-    (0, "100:0"),
+/// Hardcoded gender ratios for Gen 1–3 National Dex (species 1–386).
+///
+/// Each value is the ratio byte: `pid % 256 < ratio → female`.
+/// `0` = always male, `254` = always female, `255` = genderless.
+pub const GENDER_RATIO: [u8; 386] = [
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 254, 254, 254, 0, 0, 0, 191, 191,
+    191, 191, 191, 191, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+    127, 127, 127, 63, 63, 127, 127, 127, 63, 63, 63, 63, 63, 63, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 127, 127, 127, 255, 255, 127, 127, 127, 127, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 127, 127, 127, 127, 255, 255, 127, 127, 127, 127, 0, 0, 127,
+    127, 127, 127, 127, 254, 127, 254, 127, 127, 127, 127, 255, 255, 127, 127, 254, 63, 63,
+    127, 0, 127, 127, 127, 255, 31, 31, 31, 31, 255, 31, 31, 31, 31, 31, 31, 255,
+    255, 255, 127, 127, 127, 255, 255, 31, 31, 31, 31, 31, 31, 31, 31, 31, 127, 127,
+    127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 191, 191, 31, 31, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 31, 31, 127,
+    127, 127, 255, 127, 127, 127, 127, 127, 127, 127, 191, 191, 127, 127, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 191, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 255, 127,
+    127, 0, 0, 254, 63, 63, 254, 254, 255, 255, 255, 127, 127, 127, 255, 255, 255, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+    127, 127, 127, 255, 127, 127, 127, 63, 63, 191, 127, 191, 191, 127, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 127, 0, 254, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 255, 255, 127, 127, 127, 127,
+    255, 255, 31, 31, 31, 31, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+    127, 127, 127, 127, 127, 127, 127, 127, 31, 191, 127, 127, 127, 255, 255, 255, 255, 255,
+    255, 254, 0, 255, 255, 255, 255, 255,
 ];
 
 /// Experience thresholds for each level (1–100) across all six growth rates.
@@ -277,13 +296,7 @@ impl Gen3GameData {
 
     /// Returns item names for the given Gen III save pocket from the database.
     pub fn pocket_items(&self, pocket: crate::gen3::save::storage::Pocket) -> Result<Vec<String>> {
-        let pocket_str = match pocket {
-            crate::gen3::save::storage::Pocket::Items => "items",
-            crate::gen3::save::storage::Pocket::Pokeballs => "balls",
-            crate::gen3::save::storage::Pocket::Berries => "berries",
-            crate::gen3::save::storage::Pocket::Tms => "tms",
-            crate::gen3::save::storage::Pocket::Key => "key",
-        };
+        let pocket_str = Pocket::from(pocket).as_db_str();
         let conn = Connection::open("pk_edit.db")?;
         let mut stmt = conn.prepare(
             "SELECT name_en FROM items WHERE game_family = 'gen3' AND pocket = ?1 ORDER BY id_in_game",
@@ -342,7 +355,7 @@ impl GameData for Gen3GameData {
         let conn = Connection::open("pk_edit.db")?;
 
         let res = conn.query_row(
-            "SELECT growth_rate FROM species WHERE dex_num = ?1 AND game_family = 'gen3'",
+            "SELECT growth_rate FROM species WHERE dex_num = ?1 AND form = 0 AND game_family = 'gen3'",
             [dex_num],
             |row| row.get(0),
         );
@@ -357,7 +370,7 @@ impl GameData for Gen3GameData {
         let conn = Connection::open("pk_edit.db")?;
 
         let res = conn.query_row(
-            "SELECT name_en FROM species WHERE dex_num = ?1 AND game_family = 'gen3'",
+            "SELECT name_en FROM species WHERE dex_num = ?1 AND form = 0 AND game_family = 'gen3'",
             [dex_num],
             |row| row.get(0),
         );
@@ -388,6 +401,10 @@ impl GameData for Gen3GameData {
     /// Returns `(primary_type, secondary_type)` for a species by National Dex number.
     /// The secondary type is `None` for single-type Pokémon.
     fn typing(&self, dex_num: u16) -> Result<(String, Option<String>)> {
+        self.typing_form(dex_num, 0)
+    }
+
+    fn typing_form(&self, dex_num: u16, form: u8) -> Result<(String, Option<String>)> {
         let conn = Connection::open("pk_edit.db")?;
 
         let res = conn.query_row(
@@ -395,8 +412,8 @@ impl GameData for Gen3GameData {
             FROM species s
             JOIN types t1 ON s.type1 = t1.id AND t1.game_family = 'gen3'
             LEFT JOIN types t2 ON s.type2 = t2.id AND t2.game_family = 'gen3'
-            WHERE s.dex_num = ?1 AND s.game_family = 'gen3'",
-            [dex_num],
+            WHERE s.dex_num = ?1 AND s.form = ?2 AND s.game_family = 'gen3'",
+            rusqlite::params![dex_num, form],
             |row| Ok((row.get(0)?, row.get(1)?)),
         );
 
@@ -406,26 +423,26 @@ impl GameData for Gen3GameData {
     }
 
     /// Returns the gender ratio string for a species by National Dex number.
-    fn gender_ratio(&self, dex_num: u16) -> Result<String> {
+    fn gender_ratio(&self, dex_num: u16) -> Result<u8> {
         let conn = Connection::open("pk_edit.db")?;
 
         let ratio: u8 = conn.query_row(
-            "SELECT gender_ratio FROM species WHERE dex_num = ?1 AND game_family = 'gen3'",
+            "SELECT gender_ratio FROM species WHERE dex_num = ?1 AND form = 0 AND game_family = 'gen3'",
             [dex_num],
             |row| row.get(0),
         )?;
 
         let _ = conn.close();
 
-        Ok(match ratio {
-            0 => "Always male".to_string(),
-            255 => "Genderless".to_string(),
-            r => format!("{:.1}% female", r as f64 / 256.0 * 100.0),
-        })
+        Ok(ratio)
     }
 
     /// Returns the abilities for a species by National Dex number.
     fn abilities(&self, dex_num: u16) -> Self::Result<Abilities> {
+        self.abilities_form(dex_num, 0)
+    }
+
+    fn abilities_form(&self, dex_num: u16, form: u8) -> Self::Result<Abilities> {
         let conn = Connection::open("pk_edit.db")?;
 
         let res = conn.query_row(
@@ -434,8 +451,8 @@ impl GameData for Gen3GameData {
              JOIN abilities a1 ON s.ability1 = a1.id_in_game AND a1.game_family = 'gen3'
              LEFT JOIN abilities a2 ON s.ability2 = a2.id_in_game AND a2.game_family = 'gen3'
              LEFT JOIN abilities ah ON s.hidden_ability = ah.id_in_game AND ah.game_family = 'gen3'
-             WHERE s.dex_num = ?1 AND s.game_family = 'gen3'",
-            [dex_num],
+             WHERE s.dex_num = ?1 AND s.form = ?2 AND s.game_family = 'gen3'",
+            rusqlite::params![dex_num, form],
             |row| {
                 Ok(Abilities {
                     slot1: row.get(0)?,
@@ -450,12 +467,33 @@ impl GameData for Gen3GameData {
         res
     }
 
+    fn ability_ids(&self, dex_num: u16) -> Self::Result<(u16, Option<u16>, Option<u16>)> {
+        self.ability_ids_form(dex_num, 0)
+    }
+
+    fn ability_ids_form(
+        &self,
+        dex_num: u16,
+        form: u8,
+    ) -> Self::Result<(u16, Option<u16>, Option<u16>)> {
+        let conn = Connection::open("pk_edit.db")?;
+        let res = conn.query_row(
+            "SELECT ability1, ability2, hidden_ability FROM species
+             WHERE dex_num = ?1 AND form = ?2 AND game_family = 'gen3'",
+            rusqlite::params![dex_num, form],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        );
+        let _ = conn.close();
+        res
+    }
+
     /// Returns the English names of all 386 Gen III species, ordered by National Dex number.
     fn species(&self) -> Result<Vec<String>> {
         let conn = Connection::open("pk_edit.db")?;
 
-        let mut stmt = conn
-            .prepare("SELECT name_en FROM species WHERE game_family = 'gen3' ORDER BY dex_num")?;
+        let mut stmt = conn.prepare(
+            "SELECT name_en FROM species WHERE game_family = 'gen3' AND form = 0 ORDER BY dex_num",
+        )?;
         let rows = stmt.query_map([], |row| row.get(0))?;
 
         let mut res = Vec::new();
@@ -492,11 +530,16 @@ impl GameData for Gen3GameData {
 
     /// Returns `(hp, attack, defense, sp_attack, sp_defense, speed)` base stats for a species.
     fn base_stats(&self, dex_num: &u16) -> Result<(u16, u16, u16, u16, u16, u16)> {
+        self.base_stats_form(*dex_num, 0)
+    }
+
+    fn base_stats_form(&self, dex_num: u16, form: u8) -> Result<(u16, u16, u16, u16, u16, u16)> {
         let conn = Connection::open("pk_edit.db")?;
 
         let res = conn.query_row(
-            "SELECT hp, atk, def, spa, spd, spe FROM species WHERE dex_num = ?1 AND game_family = 'gen3'",
-            [dex_num],
+            "SELECT hp, atk, def, spa, spd, spe FROM species
+             WHERE dex_num = ?1 AND form = ?2 AND game_family = 'gen3'",
+            rusqlite::params![dex_num, form],
             |row| {
                 Ok((
                     row.get(0)?,
@@ -536,16 +579,7 @@ impl GameData for Gen3GameData {
     }
 
     fn items_in_pocket(&self, pocket: Pocket) -> Self::Result<Vec<String>> {
-        let pocket_str = match pocket {
-            Pocket::Items => "items",
-            Pocket::Medicine => "medicine",
-            Pocket::Balls => "balls",
-            Pocket::TMs => "tms",
-            Pocket::Berries => "berries",
-            Pocket::Mail => "mail",
-            Pocket::Battle => "battle",
-            Pocket::Key => "key",
-        };
+        let pocket_str = pocket.as_db_str();
 
         let conn = Connection::open("pk_edit.db")?;
         let mut stmt = conn.prepare(
@@ -562,6 +596,10 @@ impl GameData for Gen3GameData {
         let _ = conn.close();
 
         Ok(res)
+    }
+
+    fn item_flavor_text(&self, name: &str) -> String {
+        item_flavor_text_for("gen3", name)
     }
 
     fn balls_id(&self) -> Result<Vec<u16>> {

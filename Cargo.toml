@@ -18,6 +18,8 @@ thiserror = "1.0.58"
 anyhow = "1.0"
 csv = "1"
 modular-bitfield = "0.13.0"
+md-5 = "0.10"
+ureq = "2.10"
 
 [lints.rust]
 unsafe_code = "deny" # Only if you don't need unsafe

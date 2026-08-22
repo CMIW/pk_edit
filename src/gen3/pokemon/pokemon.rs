@@ -10,7 +10,7 @@
 use crate::common::charset::gen3::{get_char, get_code};
 use crate::common::types::{ComputedStats, Gender, Move, Pokerus, StatBlock, TrainerID};
 use crate::error::PokemonError;
-use crate::gen3::game_data::{Gen3GameData, EXPERIENCE_TABLE, GENDER_THRESHOLD, NATURE, SPECIES};
+use crate::gen3::game_data::{Gen3GameData, EXPERIENCE_TABLE, NATURE, SPECIES};
 use crate::gen3::pokemon::crypto::{calculate_checksum, crypt_data};
 use crate::gen3::pokemon::data::*;
 use crate::gen3::pokemon::factory::generate_method_1;
@@ -276,6 +276,11 @@ impl Gen3Pokemon {
     /// Returns a mutable reference to the calculated stats.
     pub fn stats_mut(&mut self) -> &mut Stats {
         &mut self.stats
+    }
+
+    /// Sets the 1-byte language code (e.g. 2 = English).
+    pub fn set_language(&mut self, language: u8) {
+        self.language = language;
     }
 
     // --- Private helpers ---
@@ -679,6 +684,26 @@ impl Pokemon for Gen3Pokemon {
         species
     }
 
+    /// Alternate-form index.
+    ///
+    /// Generation III has no form byte. Unown is the only species with stored
+    /// forms, and its letter is derived from the PID by concatenating the low
+    /// two bits of each PID byte, mod 28. Every other species reports 0.
+    ///
+    /// Read-only: changing the form would require regenerating the PID.
+    fn form(&self) -> u8 {
+        const UNOWN_DEX: u16 = 201;
+        if self.nat_dex_number() != UNOWN_DEX {
+            return 0;
+        }
+        let pid = self.personality_value;
+        let value = ((pid & 0x0300_0000) >> 18)
+            | ((pid & 0x0003_0000) >> 12)
+            | ((pid & 0x0000_0300) >> 6)
+            | (pid & 0x0000_0003);
+        (value % 28) as u8
+    }
+
     fn personality_value(&self) -> u32 {
         self.personality_value
     }
@@ -808,23 +833,20 @@ impl Pokemon for Gen3Pokemon {
 // --- Private free functions ---
 
 fn gender_from_p(pid: u32, dex_num: u16) -> Gender {
-    let ratio = Gen3GameData.gender_ratio(dex_num).unwrap_or_default();
-    let threshold = GENDER_THRESHOLD
-        .iter()
-        .find(|(_, r)| *r == ratio.as_str())
-        .map(|(t, _)| *t);
-
-    match threshold {
-        Some(255) => Gender::None,
-        Some(254) => Gender::F,
-        Some(0) => Gender::M,
-        Some(t) => {
-            if (pid % 256) < t {
+    let ratio = match Gen3GameData.gender_ratio(dex_num) {
+        Ok(r) => r,
+        Err(_) => return Gender::None,
+    };
+    match ratio {
+        255 => Gender::None,
+        254 => Gender::F,
+        0 => Gender::M,
+        threshold => {
+            if (pid % 256) < threshold as u32 {
                 Gender::F
             } else {
                 Gender::M
             }
         }
-        None => Gender::None,
     }
 }

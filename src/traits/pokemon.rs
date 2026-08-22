@@ -39,6 +39,8 @@ pub trait Pokemon {
     fn is_empty(&self) -> bool;
     /// Returns the National Pokédex number.
     fn nat_dex_number(&self) -> u16;
+    /// Returns the alternate-form index. Form 0 is the base form.
+    fn form(&self) -> u8;
     /// Returns the raw personality value (PID).
     fn personality_value(&self) -> u32;
     /// Returns the Pokémon's language as a display string.

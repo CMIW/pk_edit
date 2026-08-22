@@ -98,10 +98,14 @@ pub fn gen_pokemon_from_species(
     new_pokemon.offset = pokemon.offset;
     new_pokemon.personality_value = pid;
     new_pokemon.data.misc.iv_egg_ability = ivs;
+    new_pokemon.set_language(2); // English
 
     new_pokemon.set_species(species)?;
-    new_pokemon.set_level(Gen3GameData.lowest_level(new_pokemon.nat_dex_number()))?;
+    let level = Gen3GameData.lowest_level(new_pokemon.nat_dex_number());
+    new_pokemon.set_level(level)?;
     new_pokemon.data.misc.origins_info.set_pokeball(4);
+    new_pokemon.data.misc.origins_info.set_level_met(level);
+    new_pokemon.data.misc.origins_info.set_game_of_origin(3); // Emerald (GameVersion::E)
     new_pokemon.set_ot_id(&ot_id)?;
     new_pokemon.set_ot_name(ot_name)?;
     new_pokemon.set_nickname(&species.to_uppercase())?;
