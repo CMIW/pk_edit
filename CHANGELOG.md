@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-22
+
+### Added
+
+- BDSP (Brilliant Diamond / Shining Pearl) full support: `BdspPokemon`, `BdspFactory`, save read/write, trainer, PC
+- Luminescent Platinum full support: `LumiPokemon`, `LumiFactory`, save read/write, trainer, PC
+- Form support: `form()`/`set_form()` on BDSP/Lumi, `_form` suffix methods for `typing`, `base_stats`, `abilities`, `ability_ids`
+- `Inventory8b` — BDSP/Lumi item pocket read/write via common module
+- `download_sprites` binary — parallel sprite downloader with fallback URLs
+- `seed_db` — expanded to seed BDSP/Lumi species, abilities, moves, items, and evolutions from PKHeX personal binaries
+- Ability combo box support: `abilities_form()`, `ability_ids_form()` per game family
+- Sprite lookup with form-aware naming (`{dex}_{form}.png`) and fallback chain
+
+### Changed
+
+- **Breaking**: Gen3 `SaveFile::new()` only validates the current save block (not the backup)
+- **Breaking**: `open()` accepts Gen3 saves with size ≥ 128KB (not exact 131,072)
+- Lumi MD5 hash validation is non-fatal (many tools don't recompute it)
+- `seed_db` uses PKHeX `Pouch_*` arrays for BDSP/Lumi item pocket assignment
+
+### Fixed
+
+- Lumi Pokédex: uses nibble-packed state (2 per byte, 1025 species) instead of BDSP's u32 format
+- Gen3 save format detection accepts padded saves (e.g. 131,088 bytes)
+
 ## [0.5.0] - 2026-07-06
 
 ### Added
@@ -62,5 +87,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restructured from flat `pokemon/` and `save/` modules into a generation-namespaced layout (`gen3/pokemon/`, `gen3/save/`) with shared `traits/` and `common/` modules
 - Migrated static game data storage from embedded arrays to a SQLite database
 
+[0.6.0]: https://github.com/CMIW/pk_edit/releases/tag/v0.6.0
 [0.5.0]: https://github.com/CMIW/pk_edit/releases/tag/v0.5.0
 [0.4.0]: https://github.com/CMIW/pk_edit/releases/tag/v0.4.0
